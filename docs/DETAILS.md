@@ -104,18 +104,24 @@ matches, preventing stale DNS results from being applied to a different endpoint
 ### NVS Namespace Isolation
 
 All WireGuard settings live in a dedicated `"wg"` `Preferences` namespace, completely
-separate from the `"audio"` namespace that holds RTSP/Audio configuration. This gives
-clean scoping for the two reset actions:
+separate from the `"audio"` namespace that holds RTSP/Audio configuration. The two
+namespaces are erased independently by the reset actions, giving clean scoping:
 
-| Action | `"wg"` | `"audio"` | WiFi credentials (system NVS) |
-|--------|:------:|:---------:|:-----------------------------:|
-| Factory Reset ("Defaults") | preserved | cleared | preserved |
-| Ship-Ready Reset | preserved | preserved | cleared |
+| Action | `"wg"` | `"audio"` | WiFi credentials (system NVS) | Confirm dialog |
+|--------|:------:|:---------:|:-----------------------------:|:--------------:|
+| Reboot | preserved | preserved | preserved | none |
+| Reset I2S | preserved | preserved | preserved | none |
+| Defaults | cleared | cleared | preserved | yes |
+| Reset Wi-Fi | preserved | preserved | cleared | yes |
 
-WireGuard keys are never added to the `"audio"` namespace. Ship-Ready Reset clears only
+WireGuard keys are never added to the `"audio"` namespace. Reset Wi-Fi clears only
 WiFi credentials via `WiFiManager::resetSettings()` (the deferred-reboot pattern, so the
 restart does not happen from HTTP context), then reboots into the captive portal. After
 the end user joins WiFi, the preserved WireGuard configuration auto-connects.
+
+Defaults wipes both `"audio"` and `"wg"` namespaces in a single action — it is the
+device's closest equivalent to a factory reset while still preserving the Wi-Fi
+connection.
 
 ### Web UI Surface
 
@@ -126,7 +132,7 @@ pattern:
    endpoint (`host:port`), tunnel IP (CIDR), keepalive (seconds).
 2. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
    and a color-coded state badge matching the existing RTSP server toggle. Includes the
-   Ship-Ready Reset button. Note: the admin can reach this web UI over the tunnel at
+    Reset Wi-Fi button. Note: the admin can reach this web UI over the tunnel at
    `http://<tunnel-ip>/` from any peer on the same WireGuard network.
 3. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
    (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Each URL has a Copy
@@ -256,6 +262,7 @@ added as a peer in the WireGuard server configuration.
 - Thermal protection config (30–95°C limit)
 - Auto recovery and scheduled resets
 - Timestamped log viewer with copy button
+- Reset controls: `Reboot`, `Reset I2S`, `Defaults` (wipes audio + WireGuard, preserves WiFi; confirmation dialog), `Reset Wi-Fi` (wipes only WiFi; confirmation dialog)
 
 ## Troubleshooting
 
@@ -293,7 +300,9 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 
 ### v2.4.0
 - Optional WireGuard tunnel (client-only) with web UI configuration and status
-- Ship-Ready Reset action — clears only WiFi credentials, preserves WireGuard and audio config
+- Reset Wi-Fi action — clears only WiFi credentials, preserves WireGuard and audio config (renamed from Ship-Ready Reset; same behavior)
+- Defaults now clears both `"audio"` and `"wg"` namespaces (previously preserved WireGuard config); effectively a full reset except for WiFi
+- Both Defaults and Reset Wi-Fi prompt with a confirmation dialog describing their exact scope before executing
 - RTSP URL card with Copy buttons (LAN URL always shown, WireGuard URL shown when tunnel is up)
 - Async DNS resolution for endpoint hostname (does not block the web UI)
 - Vendored `ciniml/WireGuard-ESP32-Arduino` library with PersistentKeepalive support and rx/tx byte counters

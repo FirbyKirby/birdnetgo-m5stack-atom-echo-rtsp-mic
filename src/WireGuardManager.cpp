@@ -374,3 +374,29 @@ void wg_setKeepalive(uint16_t seconds) {
     _cancelDNS("keepalive changed");
     if (s_wg.is_initialized()) wg_stop();
 }
+
+void wg_clear() {
+    if (s_dnsTaskHandle != NULL) _cancelDNS("clearing WG config");
+    if (s_wg.is_initialized()) {
+        s_wg.end();
+        simplePrintln("WG: tunnel stopped");
+    }
+
+    s_enabled = false;
+    s_privateKey = "";
+    s_serverPublicKey = "";
+    s_endpointHost = "";
+    s_endpointPort = 51820;
+    s_tunnelAddress = "";
+    s_keepalive = 25;
+    s_state = WG_DISABLED;
+    s_wasUp = false;
+    s_lastAttemptMs = 0;
+    s_backoffMs = 5000;
+
+    wgPrefs.begin("wg", false);
+    wgPrefs.clear();
+    wgPrefs.end();
+
+    simplePrintln("WG: config cleared");
+}

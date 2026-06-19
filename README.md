@@ -84,9 +84,18 @@ The web UI's **RTSP URLs** card shows two addresses, each with a **Copy** button
 
 The **WireGuard Status** card shows live tunnel state, last handshake time, and bytes received/transmitted. If the tunnel drops, the firmware retries automatically in the background — BirdNet-Go reconnects once it is restored.
 
-### Ship-Ready Reset
+### Reset Controls
 
-The **Ship-Ready Reset** button (in the Status card) clears **only** the saved WiFi credentials, then reboots. It preserves the WireGuard configuration and all audio settings. Use this before mailing a device to an end user: on next boot the captive portal appears, they join their home WiFi, and the tunnel comes up automatically with no further action.
+| Button | Audio settings | Wi-Fi credentials | WireGuard config | Confirm dialog |
+|---|---|---|---|---|
+| `Reboot` | preserve | preserve | preserve | none |
+| `Reset I2S` | preserve | preserve | preserve | none |
+| `Defaults` | wipe | preserve | wipe | yes |
+| `Reset Wi-Fi` | preserve | wipe | preserve | yes |
+
+**Reset Wi-Fi** clears **only** the saved WiFi credentials, then reboots. It preserves the WireGuard configuration and all audio settings. Use this before mailing a device to an end user: on next boot the captive portal appears, they join their home WiFi, and the tunnel comes up automatically with no further action.
+
+**Defaults** wipes both audio settings and WireGuard configuration, leaving only the Wi-Fi connection intact. Use this for a full clean slate without having to rejoin WiFi.
 
 ### Remote Web UI over the Tunnel
 
@@ -94,8 +103,8 @@ Once the tunnel is up, the Atom Echo's web UI is reachable at `http://<tunnel-ip
 
 ### Privacy / Security
 
-- The private key is stored in plaintext NVS, in a dedicated `"wg"` namespace (the same trust model as WiFiManager storing WiFi passwords). It is never sent in full over the API and never written to logs.
-- The existing Factory Reset clears only audio settings and leaves the WireGuard config intact. Ship-Ready Reset clears only WiFi credentials.
+- The private key is stored in plaintext NVS, in a dedicated `"wg"` namespace. It is never sent in full over the API and never written to logs.
+- `Defaults` clears both the `"audio"` and `"wg"` namespaces, leaving only WiFi intact. `Reset Wi-Fi` clears only WiFi credentials, preserving audio and WireGuard config.
 
 ## Recommended Settings
 

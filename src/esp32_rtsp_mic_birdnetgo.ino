@@ -551,6 +551,9 @@ void resetToDefaultSettings() {
     audioPrefs.clear();
     audioPrefs.end();
 
+    // Also clear the WireGuard config (same NVS isolation rules apply the other way)
+    wg_clear();
+
     // Reset runtime variables to defaults
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;

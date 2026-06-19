@@ -35,3 +35,8 @@ void wg_setServerPublicKey(const String& key);
 void wg_setEndpoint(const String& host, uint16_t port);
 void wg_setTunnelAddress(const String& addr);
 void wg_setKeepalive(uint16_t seconds);
+
+// Clear all WireGuard config — stops the tunnel, cancels any in-flight DNS,
+// erases the "wg" NVS namespace, and resets in-memory state to disabled defaults.
+// Called from resetToDefaultSettings() so the "Defaults" action also wipes WG.
+void wg_clear();
