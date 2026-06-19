@@ -36,6 +36,192 @@ Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 ne
 - Xtensa `memw` memory barriers on critical flag transitions
 - `core1OwnsLED` flag prevents concurrent FastLED/RMT driver access
 
+## WireGuard Tunnel
+
+### Overview
+
+An optional WireGuard tunnel is provided by a new `WireGuardManager` module
+(`src/WireGuardManager.cpp` / `.h`). The tunnel is **opt-in and client-only**: the device
+initiates outbound UDP to a configured server endpoint and never listens for inbound
+WireGuard traffic. It is built on a vendored copy of
+`ciniml/WireGuard-ESP32-Arduino` v0.1.5 (under `lib/WireGuard-ESP32/`, which also bundles
+the `wireguard-lwip` dependency) with the modifications described below.
+
+When the tunnel is up the device has a routable tunnel IP, and `rtsp://<tunnel-ip>:8554/`
+is byte-for-byte identical RTSP/RTP to a LAN stream — fully transparent to any RTSP
+client, including BirdNet-Go. The only required step is entering the tunnel-IP source URL
+on the consuming side.
+
+### Threading Model
+
+All WireGuard activity — setup, teardown, retry, status reads, and web handler
+invocations — runs on **Core 0 only**, driven from `wg_tick()` in the main loop and the
+web request handlers (which are also served on Core 0). Core 1's audio path is
+untouched: the RTSP server still binds `0.0.0.0:8554`, and lwIP routes inbound
+connections to the appropriate `netif`, so the tunnel IP transparently delivers RTSP
+traffic when the consuming client connects to it. No changes are made to the audio
+pipeline or the socket-ownership model described above.
+
+### Time-Sync Gating
+
+WireGuard handshakes require a sane wall clock. The tunnel connect is therefore gated on
+`time(&now) > 100000` (a valid NTP-synced clock). If NTP is not yet valid, the tunnel
+start is deferred and re-attempted from `wg_tick()` once time is valid.
+
+### State Machine
+
+```
+DISABLED → WAIT_TIME → WAIT_WIFI → CONNECTING → UP
+```
+
+The module retries indefinitely with backoff (5s → 30s cap) on handshake failure or peer
+down. Any configuration transition cancels any in-flight setup and resets the state:
+
+- `wg_setEnabled()`
+- `wg_setEndpoint()`
+- `wg_setPrivateKey()`
+- `wg_setServerPublicKey()`
+- `wg_setTunnelAddress()`
+- `wg_setKeepalive()`
+
+A successful peer-up transition resets the backoff to 5s. On peer-down, the module waits
+up to 30s before tearing the interface down and reconnecting.
+
+### Async DNS Resolution
+
+Endpoint hostname resolution runs in a dedicated FreeRTOS task (`_dnsResolveTask`,
+pinned to Core 0) with a 5-attempt backoff schedule:
+
+```
+delays[] = {0ms, 500ms, 500ms, 1s, 2s}   // total wait ≤ ~4s + per-attempt DNS timeout
+```
+
+This keeps the web UI responsive even when the endpoint host's DNS is slow. A generation
+counter (`s_dnsGeneration`) is bumped on every configuration change or cancellation; the
+DNS task checks its captured generation on each attempt and aborts early if it no longer
+matches, preventing stale DNS results from being applied to a different endpoint.
+
+### NVS Namespace Isolation
+
+All WireGuard settings live in a dedicated `"wg"` `Preferences` namespace, completely
+separate from the `"audio"` namespace that holds RTSP/Audio configuration. This gives
+clean scoping for the two reset actions:
+
+| Action | `"wg"` | `"audio"` | WiFi credentials (system NVS) |
+|--------|:------:|:---------:|:-----------------------------:|
+| Factory Reset ("Defaults") | preserved | cleared | preserved |
+| Ship-Ready Reset | preserved | preserved | cleared |
+
+WireGuard keys are never added to the `"audio"` namespace. Ship-Ready Reset clears only
+WiFi credentials via `WiFiManager::resetSettings()` (the deferred-reboot pattern, so the
+restart does not happen from HTTP context), then reboots into the captive portal. After
+the end user joins WiFi, the preserved WireGuard configuration auto-connects.
+
+### Web UI Surface
+
+Three new cards are added to the single-page app, following the existing dark-theme card
+pattern:
+
+1. **WireGuard** — configuration form: enable toggle, private key, server public key,
+   endpoint (`host:port`), tunnel IP (CIDR), keepalive (seconds).
+2. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
+   and a color-coded state badge matching the existing RTSP server toggle. Includes the
+   Ship-Ready Reset button. Note: the admin can reach this web UI over the tunnel at
+   `http://<tunnel-ip>/` from any peer on the same WireGuard network.
+3. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
+   (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Each URL has a Copy
+   button (reusing the existing copy-to-clipboard JS pattern).
+
+The new `/api/wg_status` JSON endpoint is polled at the same 3-second interval as the
+other status endpoints:
+
+```json
+{
+  "enabled": true,
+  "state": "up",
+  "last_handshake": "12s ago",
+  "rx_bytes": 1048576,
+  "tx_bytes": 524288,
+  "rx_pretty": "1.0 MB",
+  "tx_pretty": "512 KB",
+  "tunnel_ip": "10.99.0.2",
+  "tunnel_addr": "10.99.0.2/24",
+  "endpoint": "wg.example.com:51820",
+  "keepalive": 25,
+  "private_key": "********",
+  "server_public_key": "<base64>",
+  "lan_url": "rtsp://192.168.1.42:8554/",
+  "wg_url": "rtsp://10.99.0.2:8554/"
+}
+```
+
+Strings are localized to English and Czech.
+
+### Security Model
+
+The private key is stored in NVS in plaintext, matching the same convention used for
+WiFiManager's WiFi password storage. The web API never returns the private key in full:
+
+- `/api/wg_status` masks it as `"********"` (empty string when unset).
+- `httpSet()` masks the logged value as `"********"` for the `wg_priv` key.
+
+The server public key is non-sensitive and is returned in full so the UI can re-populate
+the input field.
+
+### Vendored Library Modifications
+
+`lib/WireGuard-ESP32/` is a pinned copy of v0.1.5 (which bundles the `wireguard-lwip`
+dependency) with three modifications:
+
+1. **`PersistentKeepalive` support** — `WireGuard::begin()` gains a
+   `persistentKeepalive` parameter (default 25s) that sets `peer.keep_alive` in the
+   `wireguardif_peer` struct. This is required because the consuming RTSP client
+   initiates the inbound TCP connection to the device's tunnel IP, so the device's NAT
+   mapping must stay open even when idle.
+
+   ```cpp
+   bool WireGuard::begin(const IPAddress& localIP, const IPAddress& Subnet,
+                         const IPAddress& Gateway, const char* privateKey,
+                         const char* remotePeerAddress, const char* remotePeerPublicKey,
+                         uint16_t remotePeerPort, uint16_t persistentKeepalive);
+   ```
+
+2. **rx/tx byte counters** — `uint64_t rx_bytes` and `uint64_t tx_bytes` are added to
+   `struct wireguard_peer` and incremented in `wireguardif_process_data_message()` and
+   `wireguardif_output_to_peer()` respectively.
+
+3. **Public accessors** — added to the `WireGuard` class:
+
+   | Accessor | Returns |
+   |----------|---------|
+   | `isPeerUp()` | `true` if `wireguardif_peer_is_up()` succeeds |
+   | `lastHandshakeMs()` | `millis()` timestamp of the current/previous keypair |
+   | `rxBytes()` | bytes received over the tunnel (from the peer struct) |
+   | `txBytes()` | bytes transmitted over the tunnel (from the peer struct) |
+
+### Configuration Storage
+
+The `"wg"` namespace keys:
+
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `en` | bool | false | WireGuard enabled |
+| `priv` | string | `""` | Device private key (base64) |
+| `srvpub` | string | `""` | Server public key (base64) |
+| `endhost` | string | `""` | Server endpoint hostname or IP |
+| `endport` | uint16 | 51820 | Server endpoint UDP port |
+| `tunaddr` | string | `""` | Device tunnel address (CIDR, e.g. `10.99.0.2/24`) |
+| `keepalive` | uint16 | 25 | PersistentKeepalive interval (seconds) |
+
+WireGuard key pairs can be generated on any machine with the `wg` tools:
+
+```sh
+wg genkey | tee private.key | wg pubkey > public.key
+```
+
+The private key is entered into the device's web UI; the corresponding public key is
+added as a peer in the WireGuard server configuration.
+
 ## Audio Tuning
 
 ### Signal Levels
@@ -104,6 +290,16 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 4. Reduce WiFi TX power if causing interference
 
 ## Version History
+
+### v2.4.0
+- Optional WireGuard tunnel (client-only) with web UI configuration and status
+- Ship-Ready Reset action — clears only WiFi credentials, preserves WireGuard and audio config
+- RTSP URL card with Copy buttons (LAN URL always shown, WireGuard URL shown when tunnel is up)
+- Async DNS resolution for endpoint hostname (does not block the web UI)
+- Vendored `ciniml/WireGuard-ESP32-Arduino` library with PersistentKeepalive support and rx/tx byte counters
+- All WireGuard settings stored in a dedicated `"wg"` NVS namespace (isolated from `"audio"`)
+- Platform pinned to `espressif32 @ 6.11.0`
+- Private key never logged in full or returned by the API in full
 
 ### v2.3.0
 - Socket ownership model — Core 1 exclusively owns WiFiClient during streaming
