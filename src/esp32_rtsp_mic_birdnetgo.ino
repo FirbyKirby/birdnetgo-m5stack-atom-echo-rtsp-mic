@@ -6,6 +6,7 @@
 #include <math.h>
 #include <M5Atom.h>
 #include "WebUI.h"
+#include "WireGuardManager.h"
 
 // ================== DUAL-CORE AUDIO ARCHITECTURE ==================
 // Core 1: Complete audio pipeline (I2S → process → RTP → WiFi)
@@ -25,7 +26,7 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.3.0"
+#define FW_VERSION "2.4.0"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
 
@@ -1346,6 +1347,8 @@ void setup() {
         Serial.println(" failed (will use uptime)");
     }
 
+    wg_load();
+
     // Apply configured WiFi TX power after connect (logs once on change)
     applyWifiTxPower(true);
 
@@ -1424,6 +1427,8 @@ void setup() {
 void loop() {
     // Update M5Atom (for button and LED handling)
     M5.update();
+
+    wg_tick();
 
     webui_handleClient();
 
