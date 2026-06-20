@@ -57,20 +57,27 @@ static void _dnsResolveTask(void* param) {
     uint8_t myGen = (uint8_t)(uintptr_t)param;
 
     // Backoff schedule: 5 attempts. Delays between attempts:
-    //   0ms, 500ms, 500ms, 1s, 2s  →  total ≤ ~4s of wait + DNS timeout per attempt
-    // DNS itself can take a few seconds internally; we do not block the main loop
-    // while this task is running.
+    //   0ms, 500ms, 500ms, 1s, 2s  →  max ~4s of wait + DNS timeout per attempt.
+    // Each delay is broken into 100ms ticks so a cancellation (generation bump)
+    // is noticed quickly — critical because _cancelDNS no longer force-kills
+    // this task. Force-killing a task mid-lwIP call corrupts lwIP lock state.
     const uint32_t delays[] = {0, 500, 500, 1000, 2000};
     bool success = false;
 
     for (int retry = 0; retry < 5 && !success; retry++) {
-        if (myGen != s_dnsGeneration) break;          // endpoint/config changed
-        if (s_dnsTaskHandle == NULL) break;           // explicitly cancelled
+        // Chunked delay — bail early if generation changed.
         if (delays[retry] > 0) {
-            vTaskDelay(pdMS_TO_TICKS(delays[retry]));
+            uint32_t waited = 0;
+            while (waited < delays[retry] && myGen == s_dnsGeneration) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                waited += 100;
+            }
         }
-        if (myGen != s_dnsGeneration) break;
-        if (s_dnsTaskHandle == NULL) break;
+        // Generation may have changed while we were blocking in sleep above.
+        if (myGen != s_dnsGeneration) goto cleanup;
+        // Force-killing the task here would corrupt lwIP state, so we must
+        // also check before the potentially-blocking call.
+        if (s_dnsTaskHandle == NULL) goto cleanup;
 
         struct addrinfo hint;
         struct addrinfo *res = NULL;
@@ -87,6 +94,9 @@ static void _dnsResolveTask(void* param) {
                 success = true;
             }
         }
+        // lwIP may have taken seconds to reply (DNS timeout). Re-check so we
+        // don't publish stale results after a cancellation.
+        if (myGen != s_dnsGeneration) goto cleanup;
     }
 
     if (myGen == s_dnsGeneration && s_dnsTaskHandle != NULL) {
@@ -94,6 +104,10 @@ static void _dnsResolveTask(void* param) {
         s_dnsFailed = !success;
         __asm__ __volatile__("memw" ::: "memory");
     }
+
+cleanup:
+    // Self-delete. Do NOT call vTaskDelete from outside this task while it may
+    // still be inside lwIP (see _cancelDNS).
     s_dnsTaskHandle = NULL;
     vTaskDelete(NULL);
 }
@@ -126,15 +140,18 @@ static void _startTunnelWithIP(const String& resolvedIP) {
 }
 
 static void _cancelDNS(const char* reason) {
+    // Bump the generation counter and log, but deliberately DO NOT call
+    // vTaskDelete on the running task. Force-killing a task while it may be
+    // inside lwip_getaddrinfo() (or any lwIP call) corrupts lwIP's internal
+    // lock / queue state — observed on ESP32 as:
+    //   "assert failed: spinlock_acquire spinlock.h:122..."
+    //   "assert failed: xQueueGenericSend queue.c:832..."
+    // The task has a cancellation gate in its retry loop (generation check every
+    // 100ms, plus checks around lwip_getaddrinfo) and exits itself cleanly
+    // within ~100ms, publishing no result.
     if (s_dnsTaskHandle != NULL) {
         s_dnsGeneration++;
         __asm__ __volatile__("memw" ::: "memory");
-        TaskHandle_t h = s_dnsTaskHandle;
-        s_dnsTaskHandle = NULL;
-        s_dnsDone = false;
-        s_dnsFailed = false;
-        s_resolvedEndpointIP = "";
-        vTaskDelete(h);
         simplePrintln(String("WG: ") + reason + " — DNS cancelled");
     } else {
         s_dnsDone = false;
