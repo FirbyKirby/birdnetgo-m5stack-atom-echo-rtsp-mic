@@ -1,6 +1,6 @@
 # M5Stack Atom Echo — RTSP Microphone for BirdNET-Go
 
-A high-quality RTSP audio streaming server for the **M5Stack Atom Echo**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
+**Firmware v2.4.0** — A high-quality RTSP audio streaming server for the **M5Stack Atom Echo**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
 
 <p align="left">
   <img src="https://shop.m5stack.com/cdn/shop/files/3_e4ea519e-765f-4f30-aad1-7855ff9f8744_1200x1200.jpg" alt="M5Stack Atom Echo" width="300">
@@ -32,20 +32,96 @@ On first boot, connect to the `ESP32-RTSP-Mic-AP` access point and configure you
 
 ### 3. Stream
 ```bash
-vlc rtsp://atomecho.local:8554/audio
+vlc rtsp://atomecho.local:8554/
 # or
-ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/audio
+ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/
 ```
 
-**BirdNET-Go**: set audio source to `rtsp://atomecho.local:8554/audio`
+**BirdNET-Go**: set audio source to `rtsp://atomecho.local:8554/`
 
 **Web UI**: `http://atomecho.local/`
+
+## Optional: WireGuard Tunnel
+
+The firmware includes an **optional, client-only WireGuard tunnel**. When enabled, the Atom Echo establishes an outbound WireGuard connection to your WireGuard server, giving it a routable tunnel IP. This lets a device on a **different network** from BirdNet-Go stream audio over the tunnel with **no port forwarding** required on the remote network.
+
+BirdNet-Go needs **no code change** — once the tunnel is up, the device's tunnel IP behaves like a normal routable address, and BirdNet-Go simply connects to `rtsp://<tunnel-ip>:8554/`.
+
+**Why it's useful:** A device can be shipped to a remote location and handed to a non-technical end user. The end user only joins their home WiFi via the captive portal; the tunnel comes up automatically and BirdNet-Go reconnects on its own.
+
+### Configuration via Web UI
+
+Open the web UI and find the **WireGuard** card. Fields:
+
+- **Enable** — ON/OFF toggle for the tunnel.
+- **Private Key** — your WireGuard private key (base64). Rendered as a password field.
+- **Server Public Key** — the public key of your WireGuard server (base64).
+- **Server Endpoint** — your WireGuard server in `host:port` format.
+- **Tunnel IP** — the device's tunnel address in CIDR notation (e.g. `10.6.0.5/24`). Must match the peer entry on your WireGuard server.
+- **Keepalive** — persistent keepalive interval in seconds (default **25**). Keeps NAT mappings open so BirdNet-Go can reach the device even when it is idle.
+
+The private key is **never echoed back** in API responses or logs (it is masked as `********`).
+
+### Importing a WireGuard `.conf` File
+
+Instead of entering each field manually, you can import a standard `wg-quick(8)` format `.conf` file. Click the **Import Config** button in the WireGuard card, select your `.conf` file, and review the preview panel (the private key is masked). Click **Apply** to populate all fields in a single step.
+
+The import validates:
+- Exactly one `[Peer]` section (multi-peer configs are rejected)
+- Required fields: `PrivateKey`, `Address` (IPv4 only), `PublicKey`, `Endpoint`
+- Key format: 44-character base64 with trailing `=`
+
+If a `PresharedKey` is present, a warning is shown but import proceeds (PSK is not supported and is ignored).
+
+### Key Generation
+
+Generate a key pair on any computer with the `wg` tools:
+
+```bash
+wg genkey | tee private.key | wg pubkey > public.key
+```
+
+- Put the **private key** into the Atom Echo's web UI.
+- Add the **public key** as a new peer in your WireGuard server's config, assigning the same tunnel IP you entered in the web UI.
+
+### RTSP URLs
+
+The web UI's **RTSP URLs** card shows two addresses, each rendered as a clickable hyperlink (opens in VLC when clicked) with a **Copy** button:
+
+- **LAN URL** — `rtsp://<lan-ip>:8554/` (useful on the same network).
+- **WireGuard URL** — `rtsp://<tunnel-ip>:8554/` (shown only when the tunnel is up). Paste this into BirdNet-Go as the source URL for a remote device.
+
+### Diagnostics
+
+The **WireGuard Status** card shows live tunnel state, last handshake time, and bytes received/transmitted. If the tunnel drops, the firmware retries automatically in the background — BirdNet-Go reconnects once it is restored.
+
+### Reset Controls
+
+| Button | Audio settings | Wi-Fi credentials | WireGuard config | Confirm dialog |
+|---|---|---|---|---|
+| `Reboot` | preserve | preserve | preserve | none |
+| `Reset I2S` | preserve | preserve | preserve | none |
+| `Defaults` | wipe | preserve | wipe | yes |
+| `Reset Wi-Fi` | preserve | wipe | preserve | yes |
+
+**Reset Wi-Fi** clears **only** the saved WiFi credentials, then reboots. It preserves the WireGuard configuration and all audio settings. Use this before mailing a device to an end user: on next boot the captive portal appears, they join their home WiFi, and the tunnel comes up automatically with no further action.
+
+**Defaults** wipes both audio settings and WireGuard configuration, leaving only the Wi-Fi connection intact. Use this for a full clean slate without having to rejoin WiFi.
+
+### Remote Web UI over the Tunnel
+
+Once the tunnel is up, the Atom Echo's web UI is reachable at `http://<tunnel-ip>/` from any peer on the same WireGuard network (including the WireGuard server itself). No extra firmware feature is needed — the web server already listens on all interfaces.
+
+### Privacy / Security
+
+- The private key is stored in plaintext NVS, in a dedicated `"wg"` namespace. It is never sent in full over the API and never written to logs.
+- `Defaults` clears both the `"audio"` and `"wg"` namespaces, leaving only WiFi intact. `Reset Wi-Fi` clears only WiFi credentials, preserving audio and WireGuard config.
 
 ## Recommended Settings
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| Sample Rate | 16000 Hz | Optimal for PDM on Atom Echo |
+| Sample Rate | 16.0 kHz (16000 Hz) | Optimal for PDM on Atom Echo; Web UI displays and accepts values in kHz (one decimal) |
 | Gain | 3.0x | Good for outdoor use |
 | AGC | OFF | Enable for varying bird distances |
 | High-Pass | ON, 300 Hz | Removes rumble, keeps bird calls |
@@ -78,6 +154,14 @@ lib_deps =
     m5stack/M5Atom @ ^0.1.3
     fastled/FastLED @ ^3.10.3
 ```
+
+The WireGuard tunnel uses a vendored copy of
+[WireGuard-ESP32-Arduino](https://github.com/ciniml/WireGuard-ESP32-Arduino) v0.1.5
+(under `lib/WireGuard-ESP32/`), which bundles the `wireguard-lwip` dependency. No
+additional PlatformIO `lib_deps` entry is required.
+
+The build is pinned to `platform = espressif32 @ 6.11.0` (Arduino core 2.0.17, ESP-IDF
+4.4.x).
 
 ## Documentation
 
