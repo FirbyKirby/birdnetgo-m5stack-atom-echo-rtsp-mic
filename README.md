@@ -1,6 +1,6 @@
 # M5Stack Atom Echo — RTSP Microphone for BirdNET-Go
 
-A high-quality RTSP audio streaming server for the **M5Stack Atom Echo**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
+**Firmware v2.4.0** — A high-quality RTSP audio streaming server for the **M5Stack Atom Echo**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
 
 <p align="left">
   <img src="https://shop.m5stack.com/cdn/shop/files/3_e4ea519e-765f-4f30-aad1-7855ff9f8744_1200x1200.jpg" alt="M5Stack Atom Echo" width="300">
@@ -61,6 +61,17 @@ Open the web UI and find the **WireGuard** card. Fields:
 - **Keepalive** — persistent keepalive interval in seconds (default **25**). Keeps NAT mappings open so BirdNet-Go can reach the device even when it is idle.
 
 The private key is **never echoed back** in API responses or logs (it is masked as `********`).
+
+### Importing a WireGuard `.conf` File
+
+Instead of entering each field manually, you can import a standard `wg-quick(8)` format `.conf` file. Click the **Import Config** button in the WireGuard card, select your `.conf` file, and review the preview panel (the private key is masked). Click **Apply** to populate all fields in a single step.
+
+The import validates:
+- Exactly one `[Peer]` section (multi-peer configs are rejected)
+- Required fields: `PrivateKey`, `Address` (IPv4 only), `PublicKey`, `Endpoint`
+- Key format: 44-character base64 with trailing `=`
+
+If a `PresharedKey` is present, a warning is shown but import proceeds (PSK is not supported and is ignored).
 
 ### Key Generation
 
@@ -143,6 +154,14 @@ lib_deps =
     m5stack/M5Atom @ ^0.1.3
     fastled/FastLED @ ^3.10.3
 ```
+
+The WireGuard tunnel uses a vendored copy of
+[WireGuard-ESP32-Arduino](https://github.com/ciniml/WireGuard-ESP32-Arduino) v0.1.5
+(under `lib/WireGuard-ESP32/`), which bundles the `wireguard-lwip` dependency. No
+additional PlatformIO `lib_deps` entry is required.
+
+The build is pinned to `platform = espressif32 @ 6.11.0` (Arduino core 2.0.17, ESP-IDF
+4.4.x).
 
 ## Documentation
 

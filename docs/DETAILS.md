@@ -139,7 +139,45 @@ pattern:
    button (reusing the existing copy-to-clipboard JS pattern).
 
 The new `/api/wg_status` JSON endpoint is polled at the same 3-second interval as the
-other status endpoints:
+other status endpoints. Logs are polled at a separate 9-second interval (`/api/logs` is
+the heaviest payload, so decoupling it from the status poll reduces web server contention
+during active UI use).
+
+#### WireGuard `.conf` Import
+
+A browser-side `.conf` file importer is integrated into the WireGuard card. It parses
+standard `wg-quick(8)` format files entirely in JavaScript with no new C++ endpoints:
+
+1. User clicks **Import Config**, which triggers the OS file picker via a hidden
+   `<input type="file">`.
+2. The file is read with `FileReader.readAsText()`, then parsed by `parseWgConf()`.
+3. Validation runs atomically before any `/api/set` calls:
+   - Exactly one `[Peer]` section required; multi-peer configs rejected.
+   - `Address` field must contain an IPv4 CIDR; IPv6-only configs rejected.
+   - `PrivateKey` and `PublicKey` must be 44-character base64 strings (trailing `=`).
+   - `Endpoint` must match `host:port` format.
+   - `PresharedKey` presence triggers a warning but does not block import (PSK is not
+     supported by the firmware).
+4. On success, a preview panel shows parsed values (private key masked as
+   `XXXX…XXXX`) with **Apply** and **Cancel** buttons.
+5. On apply, `setv()` fires individual `/api/set?key=wg_*&value=…` calls for each
+   imported field, reusing all existing input validation and NVS persistence paths.
+
+#### UI Responsiveness Optimizations
+
+Several client-side patterns reduce perceived latency:
+
+- **Optimistic toggle:** The Server ON/OFF button and its `.active` class flip
+  synchronously on click before the network request fires. The next 3-second
+  `loadStatus()` poll reconciles the button to the actual server state.
+- **Slim post-action refresh:** The `act()` helper refreshes only `loadStatus()` instead
+  of the full 6-endpoint `loadAll()`, cutting post-click requests from 6 to 1. Reset
+  and reboot actions use their own `rebootSequence()` and are unaffected.
+- **Decoupled log polling:** `loadLogs()` runs on a separate 9-second interval,
+  independent of the 3-second status poll, reducing HTTP request contention at the
+  ESP32 web server.
+
+#### `/api/wg_status` Response
 
 ```json
 {
