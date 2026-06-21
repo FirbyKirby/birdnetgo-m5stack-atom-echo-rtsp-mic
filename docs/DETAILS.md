@@ -135,7 +135,8 @@ pattern:
     Reset Wi-Fi button. Note: the admin can reach this web UI over the tunnel at
    `http://<tunnel-ip>/` from any peer on the same WireGuard network.
 3. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
-   (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Each URL has a Copy
+   (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Both URLs are
+   rendered as clickable hyperlinks (opening in VLC when clicked) and each has a Copy
    button (reusing the existing copy-to-clipboard JS pattern).
 
 The new `/api/wg_status` JSON endpoint is polled at the same 3-second interval as the
@@ -295,7 +296,7 @@ added as a peer in the WireGuard server configuration.
 - Free heap memory and system uptime
 - RTSP connection status and packet rate
 - Real-time signal level and clipping detection
-- Audio settings (sample rate, gain, buffer, HPF, AGC)
+- Audio settings (sample rate displayed in kHz, gain, buffer, HPF, AGC)
 - CPU frequency selection (80, 120, 160, 240 MHz)
 - Thermal protection config (30–95°C limit)
 - Auto recovery and scheduled resets

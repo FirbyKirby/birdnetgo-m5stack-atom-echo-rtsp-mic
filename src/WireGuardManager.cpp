@@ -393,6 +393,11 @@ void wg_setKeepalive(uint16_t seconds) {
 }
 
 void wg_clear() {
+    // Clear NVS first so it persists even if tunnel teardown causes a crash/reboot
+    wgPrefs.begin("wg", false);
+    wgPrefs.clear();
+    wgPrefs.end();
+
     if (s_dnsTaskHandle != NULL) _cancelDNS("clearing WG config");
     if (s_wg.is_initialized()) {
         s_wg.end();
@@ -410,10 +415,6 @@ void wg_clear() {
     s_wasUp = false;
     s_lastAttemptMs = 0;
     s_backoffMs = 5000;
-
-    wgPrefs.begin("wg", false);
-    wgPrefs.clear();
-    wgPrefs.end();
 
     simplePrintln("WG: config cleared");
 }

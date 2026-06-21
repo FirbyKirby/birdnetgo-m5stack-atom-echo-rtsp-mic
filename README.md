@@ -32,12 +32,12 @@ On first boot, connect to the `ESP32-RTSP-Mic-AP` access point and configure you
 
 ### 3. Stream
 ```bash
-vlc rtsp://atomecho.local:8554/audio
+vlc rtsp://atomecho.local:8554/
 # or
-ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/audio
+ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/
 ```
 
-**BirdNET-Go**: set audio source to `rtsp://atomecho.local:8554/audio`
+**BirdNET-Go**: set audio source to `rtsp://atomecho.local:8554/`
 
 **Web UI**: `http://atomecho.local/`
 
@@ -86,7 +86,7 @@ wg genkey | tee private.key | wg pubkey > public.key
 
 ### RTSP URLs
 
-The web UI's **RTSP URLs** card shows two addresses, each with a **Copy** button:
+The web UI's **RTSP URLs** card shows two addresses, each rendered as a clickable hyperlink (opens in VLC when clicked) with a **Copy** button:
 
 - **LAN URL** — `rtsp://<lan-ip>:8554/` (useful on the same network).
 - **WireGuard URL** — `rtsp://<tunnel-ip>:8554/` (shown only when the tunnel is up). Paste this into BirdNet-Go as the source URL for a remote device.
@@ -121,7 +121,7 @@ Once the tunnel is up, the Atom Echo's web UI is reachable at `http://<tunnel-ip
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| Sample Rate | 16000 Hz | Optimal for PDM on Atom Echo |
+| Sample Rate | 16.0 kHz (16000 Hz) | Optimal for PDM on Atom Echo; Web UI displays and accepts values in kHz (one decimal) |
 | Gain | 3.0x | Good for outdoor use |
 | AGC | OFF | Enable for varying bird distances |
 | High-Pass | ON, 300 Hz | Removes rumble, keeps bird calls |
