@@ -11,7 +11,7 @@
 ## Features
 
 - **Dual-core architecture** — Core 1 handles full audio pipeline, Core 0 handles Web UI and RTSP negotiation
-- **mDNS discovery** — `atomecho.local`, no IP needed
+- **mDNS discovery** — `<hostname>.local` (default `atomecho`), no IP needed
 - **Web UI** — configure settings, view signal levels, logs, and diagnostics
 - **AGC** — automatic gain control for varying bird distances
 - **High-pass filter** — 2nd-order Butterworth (default 300Hz) removes wind/traffic
@@ -28,7 +28,7 @@ pio run --target upload
 ```
 
 ### 2. Connect to WiFi
-On first boot, connect to the `ESP32-RTSP-Mic-AP` access point and configure your WiFi. The LED turns **blue** when ready.
+On first boot, connect to the `ESP32-RTSP-Mic-<MAC-suffix>` access point (each device shows a unique suffix based on its MAC address) and configure your WiFi. The LED turns **blue** when ready.
 
 ### 3. Stream
 ```bash
@@ -40,6 +40,14 @@ ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/
 **BirdNET-Go**: set audio source to `rtsp://atomecho.local:8554/`
 
 **Web UI**: `http://atomecho.local/`
+
+### Configurable Hostname
+
+The hostname is configurable through the Web UI (**Device** card → **Hostname** field). The default is `atomecho`, but you can set it to any RFC 1123 compliant hostname (lowercase letters, digits, hyphens only; max 63 characters). This is useful for multi-device setups where each Atom Echo needs a distinct name (e.g. `kitchen-echo`, `garden-echo`).
+
+Changing the hostname reboots the device so the new name takes effect for mDNS and DHCP. The hostname:
+- Survives **Reset Wi-Fi** (preserved during provisioning)
+- Resets to `atomecho` on **Factory Reset**
 
 ## Optional: WireGuard Tunnel
 

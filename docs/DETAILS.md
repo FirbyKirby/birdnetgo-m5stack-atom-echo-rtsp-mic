@@ -123,6 +123,41 @@ Defaults wipes both `"audio"` and `"wg"` namespaces in a single action — it is
 device's closest equivalent to a factory reset while still preserving the Wi-Fi
 connection.
 
+### Configurable Hostname
+
+The device hostname is user-configurable through the **Device** card in the Web UI.
+The hostname drives:
+
+- mDNS `.local` name (e.g. `kitchen-echo.local`)
+- DHCP hostname (advertised to the router, visible in DHCP client lists)
+- Browser tab title in the Web UI
+
+**Validation**: RFC 1123 single-label rules enforced server-side with auto-normalization:
+lowercase letters, digits, and hyphens only; no leading/trailing hyphens; max 63 characters.
+Invalid characters are stripped automatically. An empty or all-invalid input falls back to
+the default `atomecho`.
+
+**Storage**: The hostname is persisted in the `"audio"` NVS namespace under key `"hostname"`.
+
+**Reset behavior**:
+- **Factory Reset** → hostname reverts to `atomecho` (NVS cleared)
+- **Reset Wi-Fi** → hostname preserved (intended for provisioning workflow: admin sets
+  hostname, resets Wi-Fi, ships device; end user joins WiFi without reconfiguring hostname)
+
+**Apply timing**: Changing the hostname reboots the device (same deferred-reboot pattern as
+other settings) so mDNS and DHCP reinitialize cleanly.
+
+#### Setup/Recovery AP SSID
+
+The captive-portal setup AP uses a per-device SSID: `ESP32-RTSP-Mic-<MAC6>`, where
+`<MAC6>` is the last 6 hex digits of the device's MAC address (e.g.
+`ESP32-RTSP-Mic-AB12CD`). This keeps the AP recognizable while disambiguating multiple
+devices in setup mode at the same location. The setup AP SSID is:
+
+- Derived at runtime from `ESP.getEfuseMac()` (not persisted)
+- Independent of the configured hostname (decoupled for recoverability)
+- Fixed prefix `ESP32-RTSP-Mic-` ensures the AP is always findable
+
 ### Web UI Surface
 
 Three new cards are added to the single-page app, following the existing dark-theme card
@@ -308,7 +343,7 @@ added as a peer in the WireGuard server configuration.
 ### LED is Yellow (Stuck in Startup)
 - Check Serial Monitor for errors
 - WiFi credentials may be incorrect
-- Reset WiFi: connect to `ESP32-RTSP-Mic-AP` and reconfigure
+- Reset WiFi: connect to `ESP32-RTSP-Mic-<MAC-suffix>` (each device has a unique suffix) and reconfigure
 
 ### LED is Red (Not Streaming)
 - Thermal protection triggered
@@ -336,6 +371,17 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 4. Reduce WiFi TX power if causing interference
 
 ## Version History
+
+### v2.5.0 (Configurable Hostname)
+- Configurable device hostname via Web UI (default `atomecho`)
+  - Drives mDNS `.local` name, DHCP hostname, and browser tab title
+  - RFC 1123 validation with auto-normalization (lowercase, alphanumeric + hyphens)
+  - Persisted in `"audio"` NVS namespace; survives Reset Wi-Fi, cleared by Factory Reset
+  - Reboot-on-save to reinitialize mDNS/DHCP cleanly
+- Setup AP SSID now uses per-device suffix: `ESP32-RTSP-Mic-<MAC6>` (e.g. `ESP32-RTSP-Mic-AB12CD`)
+  - Fixed prefix `ESP32-RTSP-Mic-` for discoverability
+  - Last 6 hex digits of MAC disambiguate multiple devices in setup mode
+- New Device card in Web UI with hostname input, live preview, and RFC 1123 help text
 
 ### v2.4.0
 - Optional WireGuard tunnel (client-only) with web UI configuration and status
