@@ -123,6 +123,14 @@ uint16_t hpfConfigCutoff = 0;
 // -- Preferences for persistent settings
 Preferences audioPrefs;
 
+// -- Device hostname (mDNS, DHCP, Web UI branding)
+#define DEFAULT_HOSTNAME "atomecho"
+#define HOSTNAME_MAX_LEN 63
+#define SETUP_AP_PREFIX "ESP32-RTSP-Mic-"
+String deviceHostname;
+String normalizeHostname(const String& raw);
+String buildSetupApSsid();
+
 // -- Diagnostics, auto-recovery and temperature monitoring
 unsigned long lastMemoryCheck = 0;
 unsigned long lastPerformanceCheck = 0;
@@ -171,6 +179,65 @@ uint32_t rtspConnectCount = 0;
 uint32_t rtspPlayCount = 0;
 
 // ===============================================
+
+// Normalize a hostname string to RFC 1123 single-label rules:
+//   - trim leading/trailing whitespace
+//   - lowercase every char
+//   - keep only [a-z0-9-]; drop everything else
+//   - collapse internal runs of '-' and strip leading/trailing '-'
+//   - truncate to HOSTNAME_MAX_LEN, re-strip trailing '-' after truncation
+// Returns "" if nothing valid remains; caller is expected to substitute the default.
+String normalizeHostname(const String& raw) {
+    String out;
+    out.reserve(raw.length());
+
+    for (size_t i = 0; i < raw.length(); i++) {
+        char c = raw[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+        }
+    }
+
+    int start = 0;
+    while (start < (int)out.length() && out[start] == '-') start++;
+    int end = out.length() - 1;
+    while (end >= start && out[end] == '-') end--;
+
+    String collapsed;
+    collapsed.reserve(end - start + 1);
+    bool prevDash = false;
+    for (int i = start; i <= end; i++) {
+        char c = out[i];
+        if (c == '-') {
+            if (!prevDash) collapsed += '-';
+            prevDash = true;
+        } else {
+            collapsed += c;
+            prevDash = false;
+        }
+    }
+
+    if (collapsed.length() > HOSTNAME_MAX_LEN) {
+        collapsed = collapsed.substring(0, HOSTNAME_MAX_LEN);
+        while (collapsed.length() > 0 && collapsed[collapsed.length() - 1] == '-') {
+            collapsed.remove(collapsed.length() - 1);
+        }
+    }
+
+    return collapsed;
+}
+
+// Build the setup/recovery AP SSID: fixed prefix + low-3-bytes of eFuse MAC as
+// 6 uppercase hex chars (e.g. "ESP32-RTSP-Mic-AB12CD"). Per-device suffix
+// disambiguates units in the same room; not persisted and not editable.
+String buildSetupApSsid() {
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t low24 = (uint32_t)(mac & 0xFFFFFFULL);
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%06X", low24);
+    return String(SETUP_AP_PREFIX) + suffix;
+}
 
 // Helper: convert WiFi power enum to dBm (for logs)
 float wifiPowerLevelToDbm(wifi_power_t lvl) {
@@ -447,6 +514,9 @@ void checkScheduledReset() {
 // Load settings from flash
 void loadAudioSettings() {
     audioPrefs.begin("audio", false);
+    deviceHostname = audioPrefs.getString("hostname", DEFAULT_HOSTNAME);
+    deviceHostname = normalizeHostname(deviceHostname);
+    if (deviceHostname == "") deviceHostname = DEFAULT_HOSTNAME;
     currentSampleRate = audioPrefs.getUInt("sampleRate", DEFAULT_SAMPLE_RATE);
     currentGainFactor = audioPrefs.getFloat("gainFactor", DEFAULT_GAIN_FACTOR);
     currentBufferSize = audioPrefs.getUShort("bufferSize", DEFAULT_BUFFER_SIZE);
@@ -491,12 +561,14 @@ void loadAudioSettings() {
                   ", WiFiTX=" + String(txShown, 1) + "dBm" +
                   ", shiftBits=" + String(i2sShiftBits) +
                   ", HPF=" + String(highpassEnabled?"on":"off") +
-                  ", HPFcut=" + String(highpassCutoffHz) + "Hz");
+                  ", HPFcut=" + String(highpassCutoffHz) + "Hz" +
+                  ", Hostname=" + deviceHostname);
 }
 
 // Save settings to flash
 void saveAudioSettings() {
     audioPrefs.begin("audio", false);
+    audioPrefs.putString("hostname", deviceHostname);
     audioPrefs.putUInt("sampleRate", currentSampleRate);
     audioPrefs.putFloat("gainFactor", currentGainFactor);
     audioPrefs.putUShort("bufferSize", currentBufferSize);
@@ -555,6 +627,7 @@ void resetToDefaultSettings() {
     wg_clear();
 
     // Reset runtime variables to defaults
+    deviceHostname = DEFAULT_HOSTNAME;
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;
     currentBufferSize = DEFAULT_BUFFER_SIZE;
@@ -1322,10 +1395,15 @@ void setup() {
     Serial.println("Initializing WiFi...");
     WiFi.setSleep(false);
 
+    // Register the DHCP hostname BEFORE connecting so the DHCP lease advertises
+    // the configured name (mDNS is started later, after we have an IP).
+    WiFi.setHostname(deviceHostname.c_str());
+
     WiFiManager wm;
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
-    if (!wm.autoConnect("ESP32-RTSP-Mic-AP")) {
+    String setupApSsid = buildSetupApSsid();
+    if (!wm.autoConnect(setupApSsid.c_str())) {
         simplePrintln("WiFi failed, restarting...");
         ESP.restart();
     }
@@ -1355,11 +1433,11 @@ void setup() {
     // Apply configured WiFi TX power after connect (logs once on change)
     applyWifiTxPower(true);
 
-    // mDNS: allows rtsp://atomecho.local:8554/audio
-    if (MDNS.begin("atomecho")) {
+    // mDNS: allows rtsp://<hostname>.local:8554/audio
+    if (MDNS.begin(deviceHostname.c_str())) {
         MDNS.addService("rtsp", "tcp", 8554);
         MDNS.addService("http", "tcp", 80);
-        simplePrintln("mDNS: atomecho.local");
+        simplePrintln("mDNS: " + deviceHostname + ".local");
     }
 
     Serial.println("Setting up I2S driver...");
@@ -1415,7 +1493,7 @@ void setup() {
     if (!overheatLatched) {
         simplePrintln("RTSP server ready on port 8554");
         simplePrintln("RTSP URL: rtsp://" + WiFi.localIP().toString() + ":8554/audio");
-        simplePrintln("RTSP URL: rtsp://atomecho.local:8554/audio");
+        simplePrintln("RTSP URL: rtsp://" + deviceHostname + ".local:8554/audio");
         // Set LED to blue when ready (green reserved for level indicator)
         if (ledMode > 0) M5.dis.drawpix(0, CRGB(0, 0, 128));
         else M5.dis.drawpix(0, CRGB(0, 0, 0));
