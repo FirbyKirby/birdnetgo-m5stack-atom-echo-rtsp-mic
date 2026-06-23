@@ -24,8 +24,11 @@
 
 ### 1. Flash
 ```bash
-pio run --target upload
+pio run --target upload && pio run --target uploadfs
 ```
+
+> [!IMPORTANT]
+> The Web UI script is served from a SPIFFS partition. Both `upload` and `uploadfs` must run for the Web UI to function. The two commands can run in either order; `uploadfs` is required at least once after a fresh flash or if SPIFFS data has been erased (e.g. via `pio run -t erase` or `esptool.py erase_flash`).
 
 ### 2. Connect to WiFi
 On first boot, connect to the `ESP32-RTSP-Mic-<MAC-suffix>` access point (each device shows a unique suffix based on its MAC address) and configure your WiFi. The LED turns **blue** when ready.

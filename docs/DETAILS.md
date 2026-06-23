@@ -147,6 +147,13 @@ the default `atomecho-<mac6>` (last 6 hex digits of the device's MAC address, lo
 **Apply timing**: Changing the hostname reboots the device (same deferred-reboot pattern as
 other settings) so mDNS and DHCP reinitialize cleanly.
 
+**Upgrade note**: Devices flashed before v2.5.0 that have the old default `atomecho`
+already stored in NVS (either set explicitly or written by a prior factory-reset path
+that used the old `atomecho` string) will retain `atomecho` after an OTA update — NVS is
+not cleared on upgrade. To adopt the new per-device default `atomecho-<mac6>`, perform a
+Factory Reset from the Web UI (preserves WiFi) or reflash the firmware and run
+`pio run -t uploadfs`.
+
 #### Setup/Recovery AP SSID
 
 The captive-portal setup AP uses a per-device SSID: `ESP32-RTSP-Mic-<MAC6>`, where
