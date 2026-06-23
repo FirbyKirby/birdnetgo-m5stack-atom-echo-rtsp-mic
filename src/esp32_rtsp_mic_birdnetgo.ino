@@ -1,12 +1,15 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <ESPmDNS.h>
+#include <SPIFFS.h>
 #include "driver/i2s.h"
 #include <Preferences.h>
 #include <math.h>
 #include <M5Atom.h>
 #include "WebUI.h"
 #include "WireGuardManager.h"
+#include <esp_netif.h>
+#include <esp_wifi.h>
 
 // ================== DUAL-CORE AUDIO ARCHITECTURE ==================
 // Core 1: Complete audio pipeline (I2S → process → RTP → WiFi)
@@ -124,10 +127,11 @@ uint16_t hpfConfigCutoff = 0;
 Preferences audioPrefs;
 
 // -- Device hostname (mDNS, DHCP, Web UI branding)
-#define DEFAULT_HOSTNAME "atomecho"
+#define DEFAULT_HOSTNAME "atomecho"  // Prefix only; full default uses MAC suffix (see defaultHostname()).
 #define HOSTNAME_MAX_LEN 63
 #define SETUP_AP_PREFIX "ESP32-RTSP-Mic-"
 String deviceHostname;
+String defaultHostname();
 String normalizeHostname(const String& raw);
 String buildSetupApSsid();
 
@@ -237,6 +241,21 @@ String buildSetupApSsid() {
     char suffix[7];
     snprintf(suffix, sizeof(suffix), "%06X", low24);
     return String(SETUP_AP_PREFIX) + suffix;
+}
+
+// Per-device default hostname: "atomecho-<mac6>" (lowercase hex).
+// DEFAULT_HOSTNAME is just the prefix; this is the value used when NVS has no
+// "hostname" key (fresh flash or after factory reset). Mirrors the AP SSID
+// naming so that multiple devices in the same location are unique by default,
+// preventing both DHCP and mDNS collisions on the LAN.
+String defaultHostname() {
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t low24 = (uint32_t)(mac & 0xFFFFFFULL);
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%06x", low24);
+    char buf[HOSTNAME_MAX_LEN + 1];
+    snprintf(buf, sizeof(buf), "%s-%s", DEFAULT_HOSTNAME, suffix);
+    return String(buf);
 }
 
 // Helper: convert WiFi power enum to dBm (for logs)
@@ -514,9 +533,9 @@ void checkScheduledReset() {
 // Load settings from flash
 void loadAudioSettings() {
     audioPrefs.begin("audio", false);
-    deviceHostname = audioPrefs.getString("hostname", DEFAULT_HOSTNAME);
+    deviceHostname = audioPrefs.getString("hostname", defaultHostname());
     deviceHostname = normalizeHostname(deviceHostname);
-    if (deviceHostname == "") deviceHostname = DEFAULT_HOSTNAME;
+    if (deviceHostname == "") deviceHostname = defaultHostname();
     currentSampleRate = audioPrefs.getUInt("sampleRate", DEFAULT_SAMPLE_RATE);
     currentGainFactor = audioPrefs.getFloat("gainFactor", DEFAULT_GAIN_FACTOR);
     currentBufferSize = audioPrefs.getUShort("bufferSize", DEFAULT_BUFFER_SIZE);
@@ -627,7 +646,7 @@ void resetToDefaultSettings() {
     wg_clear();
 
     // Reset runtime variables to defaults
-    deviceHostname = DEFAULT_HOSTNAME;
+    deviceHostname = defaultHostname();
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;
     currentBufferSize = DEFAULT_BUFFER_SIZE;
@@ -1358,6 +1377,16 @@ void setup() {
 
     Serial.begin(115200);
     delay(500);
+
+    // Mount SPIFFS for served web assets (the 45 KB /gui.js script).
+    // formatIfFailed=true auto-formats on first boot; subsequent boots mount the
+    // existing filesystem. Without this, the Web UI gets no JS and stays blank.
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[ERR] SPIFFS mount/format failed — Web UI will be broken");
+    } else {
+        Serial.println("SPIFFS mounted (GUI assets available)");
+    }
+
     Serial.println("\n\n=== ESP32 RTSP Mic Starting ===");
     Serial.println("Board: M5Stack Atom Echo");
 
@@ -1395,17 +1424,53 @@ void setup() {
     Serial.println("Initializing WiFi...");
     WiFi.setSleep(false);
 
-    // Register the DHCP hostname BEFORE connecting so the DHCP lease advertises
-    // the configured name (mDNS is started later, after we have an IP).
+    // Pre-connect: set hostname in two places so WiFiManager sees it.
+    // (a) Arduino layer — stored in _hostname, applied when WiFi.begin() runs.
+    // (b) WiFiManager layer — passed to WiFiManager::setHostname so
+    //     autoConnect's internal WiFi.begin picks it up.
+    //
+    // These are INSUFFICIENT on their own: WiFiManager's _startAP() internally
+    // calls WiFi.mode(WIFI_AP_STA), which re-creates the STA netif and resets
+    // the hostname back to the ESP-IDF default "esp32-<chipid>" (the source of
+    // the "esp32-55D990" the UDM Pro sees bouncing with "atomecho"). The real
+    // fix below (post-connect) uses ESP-IDF directly.
     WiFi.setHostname(deviceHostname.c_str());
 
     WiFiManager wm;
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
+    wm.setHostname(deviceHostname.c_str());
     String setupApSsid = buildSetupApSsid();
     if (!wm.autoConnect(setupApSsid.c_str())) {
         simplePrintln("WiFi failed, restarting...");
         ESP.restart();
+    }
+
+    // Post-connect: bypass the Arduino layer and set the hostname DIRECTLY on
+    // the STA esp_netif. This is authoritative — it doesn't depend on which
+    // code path (WiFiManager internal, Arduino wrapper, etc.) last touched the
+    // netif. Without this, the UDM Pro sees two names from the same MAC:
+    // "atomecho" from our calls and "esp32-55D990" (the ESP-IDF default seeded
+    // at netif creation) from WiFiManager's internal re-inits.
+    //
+    // After setting, force a DHCP renew so the router forgets the old binding.
+    // We're still in setup() — the audio pipeline only starts on RTSP PLAY
+    // (which hasn't happened yet), so the brief reconnect is safe.
+    esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta_netif != nullptr) {
+        esp_err_t rc = esp_netif_set_hostname(sta_netif, deviceHostname.c_str());
+        if (rc != ESP_OK) {
+            Serial.printf("[ERR] esp_netif_set_hostname failed: %d\n", (int)rc);
+        } else {
+            // Stop then restart the DHCPv4 client to push the new hostname via
+            // a fresh DHCPREQUEST. This prevents the router from continuing to
+            // show the ESP-IDF default "esp32-<chipid>" from a prior binding.
+            esp_netif_dhcpc_stop(sta_netif);
+            delay(100);
+            esp_netif_dhcpc_start(sta_netif);
+        }
+    } else {
+        Serial.println("[ERR] STA netif handle not found; hostname fix skipped");
     }
 
     simplePrintln("WiFi connected: " + WiFi.localIP().toString());

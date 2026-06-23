@@ -11,7 +11,7 @@
 ## Features
 
 - **Dual-core architecture** — Core 1 handles full audio pipeline, Core 0 handles Web UI and RTSP negotiation
-- **mDNS discovery** — `<hostname>.local` (default `atomecho`), no IP needed
+- **mDNS discovery** — `<hostname>.local` (default `atomecho-<mac6>`, unique per device), no IP needed
 - **Web UI** — configure settings, view signal levels, logs, and diagnostics
 - **AGC** — automatic gain control for varying bird distances
 - **High-pass filter** — 2nd-order Butterworth (default 300Hz) removes wind/traffic
@@ -43,11 +43,11 @@ ffplay -rtsp_transport tcp rtsp://atomecho.local:8554/
 
 ### Configurable Hostname
 
-The hostname is configurable through the Web UI (**Device** card → **Hostname** field). The default is `atomecho`, but you can set it to any RFC 1123 compliant hostname (lowercase letters, digits, hyphens only; max 63 characters). This is useful for multi-device setups where each Atom Echo needs a distinct name (e.g. `kitchen-echo`, `garden-echo`).
+The hostname is configurable through the Web UI (**Device** card → **Hostname** field). The default is `atomecho-<mac6>` (the last six hex digits of the device's MAC address), so every unit is unique on the network out of the box, but you can set it to any RFC 1123 compliant hostname (lowercase letters, digits, hyphens only; max 63 characters). A clean name like `kitchen-echo` or `garden-echo` is a common choice.
 
 Changing the hostname reboots the device so the new name takes effect for mDNS and DHCP. The hostname:
 - Survives **Reset Wi-Fi** (preserved during provisioning)
-- Resets to `atomecho` on **Factory Reset**
+- Resets to the per-device default `atomecho-<mac6>` on **Factory Reset**
 
 ## Optional: WireGuard Tunnel
 

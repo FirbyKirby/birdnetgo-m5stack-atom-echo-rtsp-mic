@@ -135,12 +135,12 @@ The hostname drives:
 **Validation**: RFC 1123 single-label rules enforced server-side with auto-normalization:
 lowercase letters, digits, and hyphens only; no leading/trailing hyphens; max 63 characters.
 Invalid characters are stripped automatically. An empty or all-invalid input falls back to
-the default `atomecho`.
+the default `atomecho-<mac6>` (last 6 hex digits of the device's MAC address, lowercase).
 
 **Storage**: The hostname is persisted in the `"audio"` NVS namespace under key `"hostname"`.
 
 **Reset behavior**:
-- **Factory Reset** → hostname reverts to `atomecho` (NVS cleared)
+- **Factory Reset** → hostname reverts to the per-device default `atomecho-<mac6>` (NVS cleared)
 - **Reset Wi-Fi** → hostname preserved (intended for provisioning workflow: admin sets
   hostname, resets Wi-Fi, ships device; end user joins WiFi without reconfiguring hostname)
 
@@ -373,7 +373,7 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 ## Version History
 
 ### v2.5.0 (Configurable Hostname)
-- Configurable device hostname via Web UI (default `atomecho`)
+- Configurable device hostname via Web UI (default `atomecho-<mac6>`, per-device unique)
   - Drives mDNS `.local` name, DHCP hostname, and browser tab title
   - RFC 1123 validation with auto-normalization (lowercase, alphanumeric + hyphens)
   - Persisted in `"audio"` NVS namespace; survives Reset Wi-Fi, cleared by Factory Reset
