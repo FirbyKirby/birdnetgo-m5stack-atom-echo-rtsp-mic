@@ -1488,6 +1488,41 @@ void setup() {
         "</script>";
     wm.setCustomHeadElement(persistentPortalNotice.c_str());
 
+    // Register explicit handlers for common captive-portal probe URLs on the
+    // WiFiManager's own WebServer. Without these, the ESP32 Arduino WebServer
+    // logs a loud "request handler not found" ERROR (inside _handleRequest(),
+    // fired *before* the onNotFound callback runs) for every probe from mobile
+    // OS captive-detection agents (iOS, Android, Windows, macOS, ChromeOS).
+    // WiFiManager's onNotFound → captivePortal() correctly 302-redirects these
+    // probes anyway, but the ERROR fires unconditionally. We also send a single
+    // space body to suppress the "content length is zero" WARNING from send()
+    // (WiFiManager's own redirect uses an empty body on its fallback path).
+    //
+    // setWebServerCallback fires after wm.server is constructed but before
+    // WiFiManager registers its own handlers, so ours are checked first. Our
+    // handlers only fire on these exact URIs — all other URIs fall through to
+    // WiFiManager's handlers/onNotFound unchanged.
+    wm.setWebServerCallback([&wm]() {
+        auto portalProbeHandler = [&wm]() {
+            IPAddress gw = WiFi.softAPIP();
+            if (gw == IPAddress(0, 0, 0, 0)) gw = WiFi.localIP();
+            String loc = String("http://") + gw.toString() + "/";
+            wm.server->sendHeader("Location", loc, true);
+            wm.server->send(302, "text/html", " ");  // single space to avoid 0-body warning
+            wm.server->client().stop();
+        };
+        wm.server->on("/hotspot-detect.html", HTTP_GET, portalProbeHandler);        // iOS / macOS / Safari
+        wm.server->on("/generate_204", HTTP_GET, portalProbeHandler);                // Android / Chrome OS / Linux NetworkManager
+        wm.server->on("/generate_200", HTTP_GET, portalProbeHandler);                // Android legacy
+        wm.server->on("/redirect", HTTP_GET, portalProbeHandler);                    // Android legacy variant
+        wm.server->on("/redirect/success.html", HTTP_GET, portalProbeHandler);       // Android variant
+        wm.server->on("/ncsi.txt", HTTP_GET, portalProbeHandler);                    // Windows NCSI
+        wm.server->on("/connecttest.txt", HTTP_GET, portalProbeHandler);             // Windows NCSI legacy
+        wm.server->on("/library/test/success.html", HTTP_GET, portalProbeHandler);   // macOS / Safari
+        wm.server->on("/success.html", HTTP_GET, portalProbeHandler);                // Samsung
+        wm.server->on("/hotspot-detect.html", HTTP_HEAD, portalProbeHandler);        // iOS HEAD probe
+    });
+
     String setupApSsid = buildSetupApSsid();
     if (!wm.autoConnect(setupApSsid.c_str())) {
         simplePrintln("WiFi failed, restarting...");

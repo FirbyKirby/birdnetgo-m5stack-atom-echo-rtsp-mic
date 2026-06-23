@@ -167,9 +167,12 @@ static String htmlIndex() {
         "pre{white-space:pre-wrap;word-break:break-word;background:#0c1325;border:1px solid var(--border);border-radius:10px;padding:10px;overflow:auto} pre#logs{height:45vh}"
 ".overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);z-index:9999} .overlay .box{background:var(--card);border:1px solid var(--border);padding:16px 20px;border-radius:12px;color:var(--fg);text-align:center;min-width:260px}"
 ".subtitle a{color:var(--acc);text-decoration:underline;overflow-wrap:anywhere} .subtitle a:hover,.subtitle a:active{color:var(--fg)}"
+"@keyframes ovrSpinner{to{transform:rotate(360deg)}}"
+".spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--acc);border-radius:50%;animation:ovrSpinner .8s linear infinite;margin:0 auto 12px auto}"
 ".copy-btn{background:none;border:none;padding:2px;cursor:pointer;line-height:1;vertical-align:middle;color:var(--acc)} .copy-btn svg{display:block}"
 "@media(max-width:600px){.hero{flex-direction:column;align-items:flex-start;gap:8px}.lang{float:none;margin-top:8px}.field{flex-wrap:nowrap;align-items:center}.field input,.field select{flex:1 1 0%;min-width:0;width:auto}.field button{flex:0 0 auto;width:auto;margin-top:0}.unit{flex:0 0 auto}input[type=number]{width:auto}select{min-width:0}.actions{flex-direction:column}.actions button{width:100%;min-height:44px}table{table-layout:fixed}td{overflow-wrap:anywhere}button,select,input{cursor:pointer}.page{padding:10px}.card{padding:10px}}"
         "</style></head><body>"
+        "<div id='ovr_init' style='position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);z-index:9998'><div class='spinner'></div><div style='color:var(--muted)' id='ovr_init_msg'>Connecting to device…</div></div>"
         "<div id='ovr' class='overlay'><div class='box' id='ovr_msg'>Restarting…</div></div>"
 "<div id='confirm_overlay' class='overlay' style='display:none'><div class='box'><p id='confirm_msg' style='margin:0 0 12px'></p><div style='display:flex;gap:8px;justify-content:center'><button id='confirm_cancel'>Cancel</button><button id='confirm_ok' class='warning'>Confirm</button></div></div></div>"
         "<div class='page'>"
@@ -635,6 +638,28 @@ void webui_begin() {
     web.on("/api/action/reboot", [](){ webui_pushLog(F("UI action: reboot")); apiSendJSON(F("{\"ok\":true}")); scheduleReboot(false, 600); });
     web.on("/api/action/factory_reset", [](){ webui_pushLog(F("UI action: factory_reset")); apiSendJSON(F("{\"ok\":true}")); scheduleReboot(true, 600); });
     web.on("/api/set", httpSet);
+
+    // Same captive-portal probe URL handlers as for WiFiManager's server.
+    // After the device is on the LAN, other devices may still make these probes
+    // to our device IP. Without these the ESP32 Arduino logs "request handler
+    // not found" for every probe. Responds with 302 redirect to our root and a
+    // single-space body to suppress the "content length is zero" WARNING.
+    auto portalProbeHandler = []() {
+        String loc = String("http://") + WiFi.localIP().toString() + "/";
+        web.sendHeader("Location", loc, true);
+        web.send(302, "text/html", " ");
+        web.client().stop();
+    };
+    web.on("/hotspot-detect.html", HTTP_GET, portalProbeHandler);
+    web.on("/generate_204", HTTP_GET, portalProbeHandler);
+    web.on("/generate_200", HTTP_GET, portalProbeHandler);
+    web.on("/redirect", HTTP_GET, portalProbeHandler);
+    web.on("/redirect/success.html", HTTP_GET, portalProbeHandler);
+    web.on("/ncsi.txt", HTTP_GET, portalProbeHandler);
+    web.on("/connecttest.txt", HTTP_GET, portalProbeHandler);
+    web.on("/library/test/success.html", HTTP_GET, portalProbeHandler);
+    web.on("/success.html", HTTP_GET, portalProbeHandler);
+
     web.begin();
 }
 
