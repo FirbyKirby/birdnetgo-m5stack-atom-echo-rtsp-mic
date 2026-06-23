@@ -1521,6 +1521,10 @@ void setup() {
         wm.server->on("/library/test/success.html", HTTP_GET, portalProbeHandler);   // macOS / Safari
         wm.server->on("/success.html", HTTP_GET, portalProbeHandler);                // Samsung
         wm.server->on("/hotspot-detect.html", HTTP_HEAD, portalProbeHandler);        // iOS HEAD probe
+        // Note: we do NOT register onNotFound here because setWebServerCallback
+        // runs BEFORE WiFiManager registers its own handleNotFound (which sends
+        // a non-empty "Not Found" page). If we registered here, ours would be
+        // overwritten. WiFiManager's handleNotFound is sufficient for the AP phase.
     });
 
     String setupApSsid = buildSetupApSsid();

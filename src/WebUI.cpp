@@ -488,6 +488,10 @@ static void httpLogs() {
         size_t idx = (logHead + LOG_CAP - logCount + i) % LOG_CAP;
         out += logBuffer[idx]; out += '\n';
     }
+    // If log buffer is empty (right after boot before any logs), use a single
+    // newline so send() is not called with zero-length body (which fires the
+    // "content length is zero" WARNING from esp32-hal WebServer.cpp).
+    if (out.length() == 0) out = '\n';
     web.send(200, "text/plain; charset=utf-8", out);
 }
 
@@ -659,6 +663,14 @@ void webui_begin() {
     web.on("/connecttest.txt", HTTP_GET, portalProbeHandler);
     web.on("/library/test/success.html", HTTP_GET, portalProbeHandler);
     web.on("/success.html", HTTP_GET, portalProbeHandler);
+
+    // Catch-all for any URL not handled above: favicon.ico, robots.txt, any
+    // future OS captive-detection probes we missed, or simple user typos.
+    // Returns a small 404 body to suppress the "content length is zero" WARNING
+    // from ESP32 Arduino WebServer's send() method.
+    web.onNotFound([]() {
+        web.send(404, "text/plain", "Not found");
+    });
 
     web.begin();
 }
