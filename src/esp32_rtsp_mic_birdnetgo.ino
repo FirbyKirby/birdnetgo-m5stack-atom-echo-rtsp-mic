@@ -1440,6 +1440,65 @@ void setup() {
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
     wm.setHostname(deviceHostname.c_str());
+
+    // Persistent strings for WiFiManager callbacks — these store raw pointers, not copies,
+    // so the Strings must outlive the WiFiManager instance (i.e. last until AP closes).
+    static String persistentPortalNotice;
+    static String persistentMenuNotice;
+    persistentPortalNotice =
+        "<style>"
+          ".portal-notice{"
+            "background:rgba(0,149,255,0.15);"
+            "border:1px solid rgba(0,149,255,0.3);"
+            "border-radius:6px;"
+            "padding:14px 16px;"
+            "margin:14px 14px 18px 14px;"
+            "font-size:13px;"
+            "line-height:1.6;"
+            "color:#ddd;"
+            "font-family:inherit;"
+          "}"
+          ".portal-notice strong{color:#0cf;display:block;margin-bottom:4px;font-size:14px;}"
+          ".portal-notice .host{"
+            "background:#111;"
+            "color:#0f8;"
+            "padding:4px 10px;"
+            "border-radius:4px;"
+            "font-family:monospace;"
+            "font-size:14px;"
+            "display:inline-block;"
+            "margin:6px 0;"
+          "}"
+        "</style>"
+        "<script>"
+          "document.addEventListener('DOMContentLoaded',function(){"
+            "var d=document.createElement('div');"
+            "d.className='portal-notice';"
+            "d.innerHTML='<strong>After saving WiFi, this portal closes.</strong>"
+              "Your device will appear on your network at:<br>"
+              "<span class=host>" + deviceHostname + ".local</span><br>"
+              "Use that address in your browser from any device on your new WiFi."
+              "(If .local does not work, check your router DHCP client list for the IP.)';"
+            "var b=document.body;"
+            "if(b){b.insertBefore(d,b.firstChild);}"
+          "});"
+        "</script>";
+    wm.setCustomHeadElement(persistentPortalNotice.c_str());
+
+    // Also add a CSS-based fallback notice to the main portal menu page,
+    // visible even if the JS injection above does not run on some captive-portal browsers.
+    persistentMenuNotice =
+        "<li><div class='portal-notice' style='margin:14px 0 18px 0'>"
+          "<strong>After saving WiFi, this portal closes.</strong><br>"
+          "Your device's web UI will be at: "
+          "<span class='host'>" + deviceHostname + ".local</span>"
+        "</div></li>";
+    wm.setCustomMenuHTML(persistentMenuNotice.c_str());
+
+    // Enable the custom menu item by including it in the menu list
+    const char* portalMenu[] = {"wifi", "custom"};
+    wm.setMenu(portalMenu, 2);
+
     String setupApSsid = buildSetupApSsid();
     if (!wm.autoConnect(setupApSsid.c_str())) {
         simplePrintln("WiFi failed, restarting...");
