@@ -167,16 +167,19 @@ devices in setup mode at the same location. The setup AP SSID is:
 
 ### Web UI Surface
 
-Three new cards are added to the single-page app, following the existing dark-theme card
+Four new cards are added to the single-page app, following the existing dark-theme card
 pattern:
 
-1. **WireGuard** — configuration form: enable toggle, private key, server public key,
+1. **Device** — hostname input with live preview, RFC 1123 help text, hostname note
+   explaining reboot-on-save behavior. The hostname, mDNS `.local` name, DHCP hostname,
+   and browser tab title are configured here.
+2. **WireGuard** — configuration form: enable toggle, private key, server public key,
    endpoint (`host:port`), tunnel IP (CIDR), keepalive (seconds).
-2. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
+3. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
    and a color-coded state badge matching the existing RTSP server toggle. Includes the
     Reset Wi-Fi button. Note: the admin can reach this web UI over the tunnel at
    `http://<tunnel-ip>/` from any peer on the same WireGuard network.
-3. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
+4. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
    (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Both URLs are
    rendered as clickable hyperlinks (opening in VLC when clicked) and each has a Copy
    button (reusing the existing copy-to-clipboard JS pattern).
@@ -389,6 +392,10 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
   - Fixed prefix `ESP32-RTSP-Mic-` for discoverability
   - Last 6 hex digits of MAC disambiguate multiple devices in setup mode
 - New Device card in Web UI with hostname input, live preview, and RFC 1123 help text
+- Captive portal notice: after saving WiFi credentials in the setup portal, users see a prominent warning on the save-success page ("After saving WiFi, this portal closes") with the device's future URL
+- Web UI script extracted from inline C++ string to SPIFFS file (`data/gui.js`) served via `web.streamFile()` with backpressure — fixes HTTP response truncation bug on ESP32 Arduino WebServer where `web.send()` silently drops data when lwIP memory pool is exhausted
+- DHCP hostname fix: after WiFiManager connects, hostname is set directly on the STA `esp_netif` via `esp_netif_set_hostname()` followed by a DHCP renew — bypasses the Arduino layer which doesn't survive re-init, and fixes stale `esp32-<chipid>` entries in router DHCP tables
+- Platform build now requires `board_build.filesystem = spiffs` and `pio run -t uploadfs`
 
 ### v2.4.0
 - Optional WireGuard tunnel (client-only) with web UI configuration and status
