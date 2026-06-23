@@ -1441,27 +1441,29 @@ void setup() {
     wm.setConfigPortalTimeout(180);
     wm.setHostname(deviceHostname.c_str());
 
-    // Persistent strings for WiFiManager callbacks — these store raw pointers, not copies,
-    // so the Strings must outlive the WiFiManager instance (i.e. last until AP closes).
+    // Inject CSS + JS into the captive portal's <head>. The script only
+    // inserts a visible notice on the /wifisave page (the page users see
+    // right before the AP closes) — not on the main menu, WiFi scan, or
+    // config pages where the message would be premature.
+    // Uses colors tuned for WiFiManager's default white background.
     static String persistentPortalNotice;
-    static String persistentMenuNotice;
     persistentPortalNotice =
         "<style>"
           ".portal-notice{"
-            "background:rgba(0,149,255,0.15);"
-            "border:1px solid rgba(0,149,255,0.3);"
+            "background:#e8f4fd;"
+            "border:1px solid #90caf9;"
             "border-radius:6px;"
             "padding:14px 16px;"
-            "margin:14px 14px 18px 14px;"
+            "margin:0 14px 18px 14px;"
             "font-size:13px;"
             "line-height:1.6;"
-            "color:#ddd;"
+            "color:#333;"
             "font-family:inherit;"
           "}"
-          ".portal-notice strong{color:#0cf;display:block;margin-bottom:4px;font-size:14px;}"
+          ".portal-notice strong{color:#0d47a1;display:block;margin-bottom:4px;font-size:14px;}"
           ".portal-notice .host{"
-            "background:#111;"
-            "color:#0f8;"
+            "background:#263238;"
+            "color:#76ff03;"
             "padding:4px 10px;"
             "border-radius:4px;"
             "font-family:monospace;"
@@ -1472,6 +1474,7 @@ void setup() {
         "</style>"
         "<script>"
           "document.addEventListener('DOMContentLoaded',function(){"
+            "if(location.pathname.indexOf('wifisave')===-1)return;"
             "var d=document.createElement('div');"
             "d.className='portal-notice';"
             "d.innerHTML='<strong>After saving WiFi, this portal closes.</strong>"
@@ -1484,20 +1487,6 @@ void setup() {
           "});"
         "</script>";
     wm.setCustomHeadElement(persistentPortalNotice.c_str());
-
-    // Also add a CSS-based fallback notice to the main portal menu page,
-    // visible even if the JS injection above does not run on some captive-portal browsers.
-    persistentMenuNotice =
-        "<li><div class='portal-notice' style='margin:14px 0 18px 0'>"
-          "<strong>After saving WiFi, this portal closes.</strong><br>"
-          "Your device's web UI will be at: "
-          "<span class='host'>" + deviceHostname + ".local</span>"
-        "</div></li>";
-    wm.setCustomMenuHTML(persistentMenuNotice.c_str());
-
-    // Enable the custom menu item by including it in the menu list
-    const char* portalMenu[] = {"wifi", "custom"};
-    wm.setMenu(portalMenu, 2);
 
     String setupApSsid = buildSetupApSsid();
     if (!wm.autoConnect(setupApSsid.c_str())) {
