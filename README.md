@@ -195,3 +195,4 @@ This project is largely based on [birdnetgo-esp32-rtsp-mic](https://github.com/S
 
 - M5Stack for the Atom Echo hardware
 - [BirdNET-Go](https://github.com/tphakala/birdnet-go) community
+- [WireGuard-ESP32-Arduino](https://github.com/ciniml/WireGuard-ESP32-Arduino) by Kenta Ida and Daniel Hope (BSD-3-Clause) — vendored WireGuard implementation for ESP32
