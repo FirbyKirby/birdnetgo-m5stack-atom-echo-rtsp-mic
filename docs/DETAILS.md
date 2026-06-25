@@ -111,7 +111,7 @@ namespaces are erased independently by the reset actions, giving clean scoping:
 |--------|:------:|:---------:|:-----------------------------:|:--------------:|
 | Reboot | preserved | preserved | preserved | none |
 | Reset I2S | preserved | preserved | preserved | none |
-| Defaults | cleared | cleared | preserved | yes |
+| Factory Reset | cleared | cleared | preserved | yes |
 | Reset Wi-Fi | preserved | preserved | cleared | yes |
 
 WireGuard keys are never added to the `"audio"` namespace. Reset Wi-Fi clears only
@@ -119,8 +119,8 @@ WiFi credentials via `WiFiManager::resetSettings()` (the deferred-reboot pattern
 restart does not happen from HTTP context), then reboots into the captive portal. After
 the end user joins WiFi, the preserved WireGuard configuration auto-connects.
 
-Defaults wipes both `"audio"` and `"wg"` namespaces in a single action — it is the
-device's closest equivalent to a factory reset while still preserving the Wi-Fi
+Factory Reset wipes both `"audio"` and `"wg"` namespaces in a single action — it is the
+device's factory reset while still preserving the Wi-Fi
 connection.
 
 ### Configurable Hostname
@@ -346,7 +346,7 @@ added as a peer in the WireGuard server configuration.
 - Thermal protection config (30–95°C limit)
 - Auto recovery and scheduled resets
 - Timestamped log viewer with copy button
-- Reset controls: `Reboot`, `Reset I2S`, `Defaults` (wipes audio + WireGuard, preserves WiFi; confirmation dialog), `Reset Wi-Fi` (wipes only WiFi; confirmation dialog)
+- Reset controls: `Reboot`, `Reset I2S`, `Factory Reset` (wipes audio + WireGuard, preserves WiFi; confirmation dialog), `Reset Wi-Fi` (wipes only WiFi; confirmation dialog)
 
 ## Troubleshooting
 
@@ -400,8 +400,8 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 ### v2.4.0
 - Optional WireGuard tunnel (client-only) with web UI configuration and status
 - Reset Wi-Fi action — clears only WiFi credentials, preserves WireGuard and audio config (renamed from Ship-Ready Reset; same behavior)
-- Defaults now clears both `"audio"` and `"wg"` namespaces (previously preserved WireGuard config); effectively a full reset except for WiFi
-- Both Defaults and Reset Wi-Fi prompt with a confirmation dialog describing their exact scope before executing
+- Factory Reset now clears both `"audio"` and `"wg"` namespaces (previously preserved WireGuard config); effectively a full reset except for WiFi
+- Both Factory Reset and Reset Wi-Fi prompt with a confirmation dialog describing their exact scope before executing
 - RTSP URL card with Copy buttons (LAN URL always shown, WireGuard URL shown when tunnel is up)
 - Async DNS resolution for endpoint hostname (does not block the web UI)
 - Vendored `ciniml/WireGuard-ESP32-Arduino` library with PersistentKeepalive support and rx/tx byte counters

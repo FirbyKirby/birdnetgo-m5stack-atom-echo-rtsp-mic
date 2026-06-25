@@ -117,12 +117,12 @@ The **WireGuard Status** card shows live tunnel state, last handshake time, and 
 |---|---|---|---|---|
 | `Reboot` | preserve | preserve | preserve | none |
 | `Reset I2S` | preserve | preserve | preserve | none |
-| `Defaults` | wipe | preserve | wipe | yes |
+| `Factory Reset` | wipe | preserve | wipe | yes |
 | `Reset Wi-Fi` | preserve | wipe | preserve | yes |
 
 **Reset Wi-Fi** clears **only** the saved WiFi credentials, then reboots. It preserves the WireGuard configuration and all audio settings. Use this before mailing a device to an end user: on next boot the captive portal appears, they join their home WiFi, and the tunnel comes up automatically with no further action.
 
-**Defaults** wipes both audio settings and WireGuard configuration, leaving only the Wi-Fi connection intact. Use this for a full clean slate without having to rejoin WiFi.
+**Factory Reset** wipes both audio settings and WireGuard configuration, leaving only the Wi-Fi connection intact. Use this for a full clean slate without having to rejoin WiFi.
 
 ### Remote Web UI over the Tunnel
 
@@ -131,7 +131,7 @@ Once the tunnel is up, the Atom Echo's web UI is reachable at `http://<tunnel-ip
 ### Privacy / Security
 
 - The private key is stored in plaintext NVS, in a dedicated `"wg"` namespace. It is never sent in full over the API and never written to logs.
-- `Defaults` clears both the `"audio"` and `"wg"` namespaces, leaving only WiFi intact. `Reset Wi-Fi` clears only WiFi credentials, preserving audio and WireGuard config.
+- `Factory Reset` clears both the `"audio"` and `"wg"` namespaces, leaving only WiFi intact. `Reset Wi-Fi` clears only WiFi credentials, preserving audio and WireGuard config.
 
 ## Recommended Settings
 
@@ -173,7 +173,6 @@ lib_deps =
     tzapu/WiFiManager @ ^2.0.17
     m5stack/M5Atom @ ^0.1.3
     fastled/FastLED @ ^3.10.3
-lib_extra_dirs = lib
 ```
 
 The Web UI JavaScript is stored in SPIFFS (`data/gui.js`) and served by the firmware. The build requires `board_build.filesystem = spiffs` in `platformio.ini`.
