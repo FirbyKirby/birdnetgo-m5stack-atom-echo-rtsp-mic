@@ -664,6 +664,18 @@ void webui_begin() {
     web.on("/library/test/success.html", HTTP_GET, portalProbeHandler);
     web.on("/success.html", HTTP_GET, portalProbeHandler);
 
+    // Explicit favicon handler — every browser requests `/favicon.ico`, and
+    // the ESP32 Arduino WebServer logs "request handler not found"
+    // unconditionally (inside _handleRequest(), before onNotFound) for any
+    // URL that lacks an explicit handler. Registering handlers for these
+    // known-requests suppresses that ERROR in the log.
+    web.on("/favicon.ico", HTTP_GET, []() {
+        web.send(204, "text/plain", " ");
+    });
+    web.on("/robots.txt", HTTP_GET, []() {
+        web.send(200, "text/plain", "User-agent: *\nDisallow: /\n");
+    });
+
     // Catch-all for any URL not handled above: favicon.ico, robots.txt, any
     // future OS captive-detection probes we missed, or simple user typos.
     // Returns a small 404 body to suppress the "content length is zero" WARNING
