@@ -1,12 +1,15 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <ESPmDNS.h>
+#include <SPIFFS.h>
 #include "driver/i2s.h"
 #include <Preferences.h>
 #include <math.h>
 #include <M5Atom.h>
 #include "WebUI.h"
 #include "WireGuardManager.h"
+#include <esp_netif.h>
+#include <esp_wifi.h>
 
 // ================== DUAL-CORE AUDIO ARCHITECTURE ==================
 // Core 1: Complete audio pipeline (I2S → process → RTP → WiFi)
@@ -26,7 +29,7 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.4.0"
+#define FW_VERSION "2.5.0"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
 
@@ -123,6 +126,15 @@ uint16_t hpfConfigCutoff = 0;
 // -- Preferences for persistent settings
 Preferences audioPrefs;
 
+// -- Device hostname (mDNS, DHCP, Web UI branding)
+#define DEFAULT_HOSTNAME "atomecho"  // Prefix only; full default uses MAC suffix (see defaultHostname()).
+#define HOSTNAME_MAX_LEN 63
+#define SETUP_AP_PREFIX "ESP32-RTSP-Mic-"
+String deviceHostname;
+String defaultHostname();
+String normalizeHostname(const String& raw);
+String buildSetupApSsid();
+
 // -- Diagnostics, auto-recovery and temperature monitoring
 unsigned long lastMemoryCheck = 0;
 unsigned long lastPerformanceCheck = 0;
@@ -171,6 +183,80 @@ uint32_t rtspConnectCount = 0;
 uint32_t rtspPlayCount = 0;
 
 // ===============================================
+
+// Normalize a hostname string to RFC 1123 single-label rules:
+//   - trim leading/trailing whitespace
+//   - lowercase every char
+//   - keep only [a-z0-9-]; drop everything else
+//   - collapse internal runs of '-' and strip leading/trailing '-'
+//   - truncate to HOSTNAME_MAX_LEN, re-strip trailing '-' after truncation
+// Returns "" if nothing valid remains; caller is expected to substitute the default.
+String normalizeHostname(const String& raw) {
+    String out;
+    out.reserve(raw.length());
+
+    for (size_t i = 0; i < raw.length(); i++) {
+        char c = raw[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+        }
+    }
+
+    int start = 0;
+    while (start < (int)out.length() && out[start] == '-') start++;
+    int end = out.length() - 1;
+    while (end >= start && out[end] == '-') end--;
+
+    String collapsed;
+    collapsed.reserve(end - start + 1);
+    bool prevDash = false;
+    for (int i = start; i <= end; i++) {
+        char c = out[i];
+        if (c == '-') {
+            if (!prevDash) collapsed += '-';
+            prevDash = true;
+        } else {
+            collapsed += c;
+            prevDash = false;
+        }
+    }
+
+    if (collapsed.length() > HOSTNAME_MAX_LEN) {
+        collapsed = collapsed.substring(0, HOSTNAME_MAX_LEN);
+        while (collapsed.length() > 0 && collapsed[collapsed.length() - 1] == '-') {
+            collapsed.remove(collapsed.length() - 1);
+        }
+    }
+
+    return collapsed;
+}
+
+// Build the setup/recovery AP SSID: fixed prefix + low-3-bytes of eFuse MAC as
+// 6 uppercase hex chars (e.g. "ESP32-RTSP-Mic-AB12CD"). Per-device suffix
+// disambiguates units in the same room; not persisted and not editable.
+String buildSetupApSsid() {
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t low24 = (uint32_t)(mac & 0xFFFFFFULL);
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%06X", low24);
+    return String(SETUP_AP_PREFIX) + suffix;
+}
+
+// Per-device default hostname: "atomecho-<mac6>" (lowercase hex).
+// DEFAULT_HOSTNAME is just the prefix; this is the value used when NVS has no
+// "hostname" key (fresh flash or after factory reset). Mirrors the AP SSID
+// naming so that multiple devices in the same location are unique by default,
+// preventing both DHCP and mDNS collisions on the LAN.
+String defaultHostname() {
+    uint64_t mac = ESP.getEfuseMac();
+    uint32_t low24 = (uint32_t)(mac & 0xFFFFFFULL);
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%06x", low24);
+    char buf[HOSTNAME_MAX_LEN + 1];
+    snprintf(buf, sizeof(buf), "%s-%s", DEFAULT_HOSTNAME, suffix);
+    return String(buf);
+}
 
 // Helper: convert WiFi power enum to dBm (for logs)
 float wifiPowerLevelToDbm(wifi_power_t lvl) {
@@ -447,6 +533,9 @@ void checkScheduledReset() {
 // Load settings from flash
 void loadAudioSettings() {
     audioPrefs.begin("audio", false);
+    deviceHostname = audioPrefs.getString("hostname", defaultHostname());
+    deviceHostname = normalizeHostname(deviceHostname);
+    if (deviceHostname == "") deviceHostname = defaultHostname();
     currentSampleRate = audioPrefs.getUInt("sampleRate", DEFAULT_SAMPLE_RATE);
     currentGainFactor = audioPrefs.getFloat("gainFactor", DEFAULT_GAIN_FACTOR);
     currentBufferSize = audioPrefs.getUShort("bufferSize", DEFAULT_BUFFER_SIZE);
@@ -491,12 +580,14 @@ void loadAudioSettings() {
                   ", WiFiTX=" + String(txShown, 1) + "dBm" +
                   ", shiftBits=" + String(i2sShiftBits) +
                   ", HPF=" + String(highpassEnabled?"on":"off") +
-                  ", HPFcut=" + String(highpassCutoffHz) + "Hz");
+                  ", HPFcut=" + String(highpassCutoffHz) + "Hz" +
+                  ", Hostname=" + deviceHostname);
 }
 
 // Save settings to flash
 void saveAudioSettings() {
     audioPrefs.begin("audio", false);
+    audioPrefs.putString("hostname", deviceHostname);
     audioPrefs.putUInt("sampleRate", currentSampleRate);
     audioPrefs.putFloat("gainFactor", currentGainFactor);
     audioPrefs.putUShort("bufferSize", currentBufferSize);
@@ -555,6 +646,7 @@ void resetToDefaultSettings() {
     wg_clear();
 
     // Reset runtime variables to defaults
+    deviceHostname = defaultHostname();
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;
     currentBufferSize = DEFAULT_BUFFER_SIZE;
@@ -1285,6 +1377,16 @@ void setup() {
 
     Serial.begin(115200);
     delay(500);
+
+    // Mount SPIFFS for served web assets (the 45 KB /gui.js script).
+    // formatIfFailed=true auto-formats on first boot; subsequent boots mount the
+    // existing filesystem. Without this, the Web UI gets no JS and stays blank.
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[ERR] SPIFFS mount/format failed — Web UI will be broken");
+    } else {
+        Serial.println("SPIFFS mounted (GUI assets available)");
+    }
+
     Serial.println("\n\n=== ESP32 RTSP Mic Starting ===");
     Serial.println("Board: M5Stack Atom Echo");
 
@@ -1322,12 +1424,140 @@ void setup() {
     Serial.println("Initializing WiFi...");
     WiFi.setSleep(false);
 
+    // Pre-connect: set hostname in two places so WiFiManager sees it.
+    // (a) Arduino layer — stored in _hostname, applied when WiFi.begin() runs.
+    // (b) WiFiManager layer — passed to WiFiManager::setHostname so
+    //     autoConnect's internal WiFi.begin picks it up.
+    //
+    // These are INSUFFICIENT on their own: WiFiManager's _startAP() internally
+    // calls WiFi.mode(WIFI_AP_STA), which re-creates the STA netif and resets
+    // the hostname back to the ESP-IDF default "esp32-<chipid>" (the source of
+    // the "esp32-55D990" the UDM Pro sees bouncing with "atomecho"). The real
+    // fix below (post-connect) uses ESP-IDF directly.
+    WiFi.setHostname(deviceHostname.c_str());
+
     WiFiManager wm;
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
-    if (!wm.autoConnect("ESP32-RTSP-Mic-AP")) {
+    wm.setHostname(deviceHostname.c_str());
+
+    // Inject CSS + JS into the captive portal's <head>. The script only
+    // inserts a visible notice on the /wifisave page (the page users see
+    // right before the AP closes) — not on the main menu, WiFi scan, or
+    // config pages where the message would be premature.
+    // Uses colors tuned for WiFiManager's default white background.
+    static String persistentPortalNotice;
+    persistentPortalNotice =
+        "<style>"
+          ".portal-notice{"
+            "background:#e8f4fd;"
+            "border:1px solid #90caf9;"
+            "border-radius:6px;"
+            "padding:14px 16px;"
+            "margin:0 14px 18px 14px;"
+            "font-size:13px;"
+            "line-height:1.6;"
+            "color:#333;"
+            "font-family:inherit;"
+          "}"
+          ".portal-notice strong{color:#0d47a1;display:block;margin-bottom:4px;font-size:14px;}"
+          ".portal-notice .host{"
+            "background:#263238;"
+            "color:#76ff03;"
+            "padding:4px 10px;"
+            "border-radius:4px;"
+            "font-family:monospace;"
+            "font-size:14px;"
+            "display:inline-block;"
+            "margin:6px 0;"
+          "}"
+        "</style>"
+        "<script>"
+          "document.addEventListener('DOMContentLoaded',function(){"
+            "if(location.pathname.indexOf('wifisave')===-1)return;"
+            "var d=document.createElement('div');"
+            "d.className='portal-notice';"
+            "d.innerHTML='<strong>After saving WiFi, this portal closes.</strong>"
+              "Your device will appear on your network at:<br>"
+              "<span class=host>" + deviceHostname + ".local</span><br>"
+              "Use that address in your browser from any device on your new WiFi.<br>"
+              "(If .local does not work, check your router DHCP client list for the IP.)';"
+            "var b=document.body;"
+            "if(b){b.insertBefore(d,b.firstChild);}"
+          "});"
+        "</script>";
+    wm.setCustomHeadElement(persistentPortalNotice.c_str());
+
+    // Register explicit handlers for common captive-portal probe URLs on the
+    // WiFiManager's own WebServer. Without these, the ESP32 Arduino WebServer
+    // logs a loud "request handler not found" ERROR (inside _handleRequest(),
+    // fired *before* the onNotFound callback runs) for every probe from mobile
+    // OS captive-detection agents (iOS, Android, Windows, macOS, ChromeOS).
+    // WiFiManager's onNotFound → captivePortal() correctly 302-redirects these
+    // probes anyway, but the ERROR fires unconditionally. We also send a single
+    // space body to suppress the "content length is zero" WARNING from send()
+    // (WiFiManager's own redirect uses an empty body on its fallback path).
+    //
+    // setWebServerCallback fires after wm.server is constructed but before
+    // WiFiManager registers its own handlers, so ours are checked first. Our
+    // handlers only fire on these exact URIs — all other URIs fall through to
+    // WiFiManager's handlers/onNotFound unchanged.
+    wm.setWebServerCallback([&wm]() {
+        auto portalProbeHandler = [&wm]() {
+            IPAddress gw = WiFi.softAPIP();
+            if (gw == IPAddress(0, 0, 0, 0)) gw = WiFi.localIP();
+            String loc = String("http://") + gw.toString() + "/";
+            wm.server->sendHeader("Location", loc, true);
+            wm.server->send(302, "text/html", " ");  // single space to avoid 0-body warning
+            wm.server->client().stop();
+        };
+        wm.server->on("/hotspot-detect.html", HTTP_GET, portalProbeHandler);        // iOS / macOS / Safari
+        wm.server->on("/generate_204", HTTP_GET, portalProbeHandler);                // Android / Chrome OS / Linux NetworkManager
+        wm.server->on("/generate_200", HTTP_GET, portalProbeHandler);                // Android legacy
+        wm.server->on("/redirect", HTTP_GET, portalProbeHandler);                    // Android legacy variant
+        wm.server->on("/redirect/success.html", HTTP_GET, portalProbeHandler);       // Android variant
+        wm.server->on("/ncsi.txt", HTTP_GET, portalProbeHandler);                    // Windows NCSI
+        wm.server->on("/connecttest.txt", HTTP_GET, portalProbeHandler);             // Windows NCSI legacy
+        wm.server->on("/library/test/success.html", HTTP_GET, portalProbeHandler);   // macOS / Safari
+        wm.server->on("/success.html", HTTP_GET, portalProbeHandler);                // Samsung
+        wm.server->on("/hotspot-detect.html", HTTP_HEAD, portalProbeHandler);        // iOS HEAD probe
+        // Note: we do NOT register onNotFound here because setWebServerCallback
+        // runs BEFORE WiFiManager registers its own handleNotFound (which sends
+        // a non-empty "Not Found" page). If we registered here, ours would be
+        // overwritten. WiFiManager's handleNotFound is sufficient for the AP phase.
+    });
+
+    String setupApSsid = buildSetupApSsid();
+    if (!wm.autoConnect(setupApSsid.c_str())) {
         simplePrintln("WiFi failed, restarting...");
         ESP.restart();
+    }
+
+    // Post-connect: bypass the Arduino layer and set the hostname DIRECTLY on
+    // the STA esp_netif. This is authoritative — it doesn't depend on which
+    // code path (WiFiManager internal, Arduino wrapper, etc.) last touched the
+    // netif. Without this, the UDM Pro sees two names from the same MAC:
+    // "atomecho" from our calls and "esp32-55D990" (the ESP-IDF default seeded
+    // at netif creation) from WiFiManager's internal re-inits.
+    //
+    // After setting, force a DHCP renew so the router forgets the old binding.
+    // We're still in setup() — the audio pipeline only starts on RTSP PLAY
+    // (which hasn't happened yet), so the brief reconnect is safe.
+    esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta_netif != nullptr) {
+        esp_err_t rc = esp_netif_set_hostname(sta_netif, deviceHostname.c_str());
+        if (rc != ESP_OK) {
+            Serial.printf("[ERR] esp_netif_set_hostname failed: %d\n", (int)rc);
+        } else {
+            // Stop then restart the DHCPv4 client to push the new hostname via
+            // a fresh DHCPREQUEST. This prevents the router from continuing to
+            // show the ESP-IDF default "esp32-<chipid>" from a prior binding.
+            esp_netif_dhcpc_stop(sta_netif);
+            delay(100);
+            esp_netif_dhcpc_start(sta_netif);
+        }
+    } else {
+        Serial.println("[ERR] STA netif handle not found; hostname fix skipped");
     }
 
     simplePrintln("WiFi connected: " + WiFi.localIP().toString());
@@ -1355,11 +1585,11 @@ void setup() {
     // Apply configured WiFi TX power after connect (logs once on change)
     applyWifiTxPower(true);
 
-    // mDNS: allows rtsp://atomecho.local:8554/audio
-    if (MDNS.begin("atomecho")) {
+    // mDNS: allows rtsp://<hostname>.local:8554/audio
+    if (MDNS.begin(deviceHostname.c_str())) {
         MDNS.addService("rtsp", "tcp", 8554);
         MDNS.addService("http", "tcp", 80);
-        simplePrintln("mDNS: atomecho.local");
+        simplePrintln("mDNS: " + deviceHostname + ".local");
     }
 
     Serial.println("Setting up I2S driver...");
@@ -1415,7 +1645,7 @@ void setup() {
     if (!overheatLatched) {
         simplePrintln("RTSP server ready on port 8554");
         simplePrintln("RTSP URL: rtsp://" + WiFi.localIP().toString() + ":8554/audio");
-        simplePrintln("RTSP URL: rtsp://atomecho.local:8554/audio");
+        simplePrintln("RTSP URL: rtsp://" + deviceHostname + ".local:8554/audio");
         // Set LED to blue when ready (green reserved for level indicator)
         if (ledMode > 0) M5.dis.drawpix(0, CRGB(0, 0, 128));
         else M5.dis.drawpix(0, CRGB(0, 0, 0));

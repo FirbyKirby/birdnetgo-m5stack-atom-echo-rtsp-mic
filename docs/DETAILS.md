@@ -111,7 +111,7 @@ namespaces are erased independently by the reset actions, giving clean scoping:
 |--------|:------:|:---------:|:-----------------------------:|:--------------:|
 | Reboot | preserved | preserved | preserved | none |
 | Reset I2S | preserved | preserved | preserved | none |
-| Defaults | cleared | cleared | preserved | yes |
+| Factory Reset | cleared | cleared | preserved | yes |
 | Reset Wi-Fi | preserved | preserved | cleared | yes |
 
 WireGuard keys are never added to the `"audio"` namespace. Reset Wi-Fi clears only
@@ -119,22 +119,67 @@ WiFi credentials via `WiFiManager::resetSettings()` (the deferred-reboot pattern
 restart does not happen from HTTP context), then reboots into the captive portal. After
 the end user joins WiFi, the preserved WireGuard configuration auto-connects.
 
-Defaults wipes both `"audio"` and `"wg"` namespaces in a single action — it is the
-device's closest equivalent to a factory reset while still preserving the Wi-Fi
+Factory Reset wipes both `"audio"` and `"wg"` namespaces in a single action — it is the
+device's factory reset while still preserving the Wi-Fi
 connection.
+
+### Configurable Hostname
+
+The device hostname is user-configurable through the **Device** card in the Web UI.
+The hostname drives:
+
+- mDNS `.local` name (e.g. `kitchen-echo.local`)
+- DHCP hostname (advertised to the router, visible in DHCP client lists)
+- Browser tab title in the Web UI
+
+**Validation**: RFC 1123 single-label rules enforced server-side with auto-normalization:
+lowercase letters, digits, and hyphens only; no leading/trailing hyphens; max 63 characters.
+Invalid characters are stripped automatically. An empty or all-invalid input falls back to
+the default `atomecho-<mac6>` (last 6 hex digits of the device's MAC address, lowercase).
+
+**Storage**: The hostname is persisted in the `"audio"` NVS namespace under key `"hostname"`.
+
+**Reset behavior**:
+- **Factory Reset** → hostname reverts to the per-device default `atomecho-<mac6>` (NVS cleared)
+- **Reset Wi-Fi** → hostname preserved (intended for provisioning workflow: admin sets
+  hostname, resets Wi-Fi, ships device; end user joins WiFi without reconfiguring hostname)
+
+**Apply timing**: Changing the hostname reboots the device (same deferred-reboot pattern as
+other settings) so mDNS and DHCP reinitialize cleanly.
+
+**Upgrade note**: Devices flashed before v2.5.0 that have the old default `atomecho`
+already stored in NVS (either set explicitly or written by a prior factory-reset path
+that used the old `atomecho` string) will retain `atomecho` after an OTA update — NVS is
+not cleared on upgrade. To adopt the new per-device default `atomecho-<mac6>`, perform a
+Factory Reset from the Web UI (preserves WiFi) or reflash the firmware and run
+`pio run -t uploadfs`.
+
+#### Setup/Recovery AP SSID
+
+The captive-portal setup AP uses a per-device SSID: `ESP32-RTSP-Mic-<MAC6>`, where
+`<MAC6>` is the last 6 hex digits of the device's MAC address (e.g.
+`ESP32-RTSP-Mic-AB12CD`). This keeps the AP recognizable while disambiguating multiple
+devices in setup mode at the same location. The setup AP SSID is:
+
+- Derived at runtime from `ESP.getEfuseMac()` (not persisted)
+- Independent of the configured hostname (decoupled for recoverability)
+- Fixed prefix `ESP32-RTSP-Mic-` ensures the AP is always findable
 
 ### Web UI Surface
 
-Three new cards are added to the single-page app, following the existing dark-theme card
+Four new cards are added to the single-page app, following the existing dark-theme card
 pattern:
 
-1. **WireGuard** — configuration form: enable toggle, private key, server public key,
+1. **Device** — hostname input with live preview, RFC 1123 help text, hostname note
+   explaining reboot-on-save behavior. The hostname, mDNS `.local` name, DHCP hostname,
+   and browser tab title are configured here.
+2. **WireGuard** — configuration form: enable toggle, private key, server public key,
    endpoint (`host:port`), tunnel IP (CIDR), keepalive (seconds).
-2. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
+3. **WireGuard Status** — tunnel state, last handshake age, rx/tx bytes (human-readable),
    and a color-coded state badge matching the existing RTSP server toggle. Includes the
     Reset Wi-Fi button. Note: the admin can reach this web UI over the tunnel at
    `http://<tunnel-ip>/` from any peer on the same WireGuard network.
-3. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
+4. **RTSP URLs** — LAN URL is always shown; the WireGuard URL
    (`rtsp://<tunnel-ip>:8554/`) is shown only when the tunnel is up. Both URLs are
    rendered as clickable hyperlinks (opening in VLC when clicked) and each has a Copy
    button (reusing the existing copy-to-clipboard JS pattern).
@@ -301,14 +346,14 @@ added as a peer in the WireGuard server configuration.
 - Thermal protection config (30–95°C limit)
 - Auto recovery and scheduled resets
 - Timestamped log viewer with copy button
-- Reset controls: `Reboot`, `Reset I2S`, `Defaults` (wipes audio + WireGuard, preserves WiFi; confirmation dialog), `Reset Wi-Fi` (wipes only WiFi; confirmation dialog)
+- Reset controls: `Reboot`, `Reset I2S`, `Factory Reset` (wipes audio + WireGuard, preserves WiFi; confirmation dialog), `Reset Wi-Fi` (wipes only WiFi; confirmation dialog)
 
 ## Troubleshooting
 
 ### LED is Yellow (Stuck in Startup)
 - Check Serial Monitor for errors
 - WiFi credentials may be incorrect
-- Reset WiFi: connect to `ESP32-RTSP-Mic-AP` and reconfigure
+- Reset WiFi: connect to `ESP32-RTSP-Mic-<MAC-suffix>` (each device has a unique suffix) and reconfigure
 
 ### LED is Red (Not Streaming)
 - Thermal protection triggered
@@ -337,11 +382,26 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 
 ## Version History
 
+### v2.5.0 (Configurable Hostname)
+- Configurable device hostname via Web UI (default `atomecho-<mac6>`, per-device unique)
+  - Drives mDNS `.local` name, DHCP hostname, and browser tab title
+  - RFC 1123 validation with auto-normalization (lowercase, alphanumeric + hyphens)
+  - Persisted in `"audio"` NVS namespace; survives Reset Wi-Fi, cleared by Factory Reset
+  - Reboot-on-save to reinitialize mDNS/DHCP cleanly
+- Setup AP SSID now uses per-device suffix: `ESP32-RTSP-Mic-<MAC6>` (e.g. `ESP32-RTSP-Mic-AB12CD`)
+  - Fixed prefix `ESP32-RTSP-Mic-` for discoverability
+  - Last 6 hex digits of MAC disambiguate multiple devices in setup mode
+- New Device card in Web UI with hostname input, live preview, and RFC 1123 help text
+- Captive portal notice: after saving WiFi credentials in the setup portal, users see a prominent warning on the save-success page ("After saving WiFi, this portal closes") with the device's future URL
+- Web UI script extracted from inline C++ string to SPIFFS file (`data/gui.js`) served via `web.streamFile()` with backpressure — fixes HTTP response truncation bug on ESP32 Arduino WebServer where `web.send()` silently drops data when lwIP memory pool is exhausted
+- DHCP hostname fix: after WiFiManager connects, hostname is set directly on the STA `esp_netif` via `esp_netif_set_hostname()` followed by a DHCP renew — bypasses the Arduino layer which doesn't survive re-init, and fixes stale `esp32-<chipid>` entries in router DHCP tables
+- Platform build now requires `board_build.filesystem = spiffs` and `pio run -t uploadfs`
+
 ### v2.4.0
 - Optional WireGuard tunnel (client-only) with web UI configuration and status
 - Reset Wi-Fi action — clears only WiFi credentials, preserves WireGuard and audio config (renamed from Ship-Ready Reset; same behavior)
-- Defaults now clears both `"audio"` and `"wg"` namespaces (previously preserved WireGuard config); effectively a full reset except for WiFi
-- Both Defaults and Reset Wi-Fi prompt with a confirmation dialog describing their exact scope before executing
+- Factory Reset now clears both `"audio"` and `"wg"` namespaces (previously preserved WireGuard config); effectively a full reset except for WiFi
+- Both Factory Reset and Reset Wi-Fi prompt with a confirmation dialog describing their exact scope before executing
 - RTSP URL card with Copy buttons (LAN URL always shown, WireGuard URL shown when tunnel is up)
 - Async DNS resolution for endpoint hostname (does not block the web UI)
 - Vendored `ciniml/WireGuard-ESP32-Arduino` library with PersistentKeepalive support and rx/tx byte counters

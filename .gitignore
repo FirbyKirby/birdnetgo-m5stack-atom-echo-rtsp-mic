@@ -4,3 +4,9 @@
 .actrc
 AGENTS.md
 docs/private/
+
+# macOS
+.DS_Store
+
+# Kilo Code
+.kilo/
